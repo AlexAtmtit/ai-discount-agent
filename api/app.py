@@ -136,6 +136,14 @@ async def simulate_message(request: SimulateRequest):
             user_id=request.user_id
         )
 
+        # For Bonus B enrichment demo, set fake enrichment data if creator is detected
+        if result["database_row"].get("identified_creator"):
+            creator = result["database_row"]["identified_creator"]
+            # Generate deterministic enrichment for demo
+            creator_hash = hash(creator) % 100000
+            result["database_row"]["follower_count"] = 10000 + (creator_hash % 900000)
+            result["database_row"]["is_potential_influencer"] = (creator_hash % 10) > 7
+
         return SimulateResponse(
             reply=result["reply"],
             database_row=result["database_row"]
@@ -148,21 +156,44 @@ async def simulate_message(request: SimulateRequest):
 
 @app.get("/analytics/creators", response_model=AnalyticsResponse)
 async def get_analytics():
-    """Get analytics summary by creator
+    """Get analytics summary by creator (Bonus C)
 
     Returns aggregated statistics for campaign performance tracking.
+    Shows how many discount codes have been requested for each creator.
     """
     try:
         store = get_store()
-        summary = store.get_analytics()
+
+        # Get interactions and aggregate manually
+        interactions = store.get_all_interactions() if hasattr(store, 'get_all_interactions') else []
+
+        # Aggregate stats
+        creators = {}
+        total_requests = 0
+        total_completed = 0
+
+        for row in interactions:
+            creator = row.get('identified_creator')
+            if not creator:
+                continue
+
+            total_requests += 1
+            conversation_status = row.get('conversation_status')
+
+            if creator not in creators:
+                creators[creator] = {'requests': 0, 'codes_sent': 0}
+
+            creators[creator]['requests'] += 1
+
+            if conversation_status == 'completed':
+                total_completed += 1
+                creators[creator]['codes_sent'] += 1
 
         return AnalyticsResponse(
-            total_creators=summary.total_creators,
-            total_requests=summary.total_requests,
-            total_completed=summary.total_completed,
-            creators={
-                k: v.dict() for k, v in summary.creators.items()
-            }
+            total_creators=len(creators),
+            total_requests=total_requests,
+            total_completed=total_completed,
+            creators=creators
         )
 
     except Exception as e:

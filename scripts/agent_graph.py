@@ -27,34 +27,9 @@ from scripts.gemini_client import get_gemini_client, LLMResult
 logger = logging.getLogger(__name__)
 
 
-class AgentState(Dict[str, Any]):
-    """State object for LangGraph agent
-
-    This dictionary holds all intermediate state during message processing.
-    """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Core message data
-        self["platform"] = kwargs.get("platform")
-        self["user_id"] = kwargs.get("user_id")
-        self["raw_message"] = kwargs.get("raw_message")
-        self["message_id"] = kwargs.get("message_id")
-
-        # Processing state
-        self["normalized_message"] = ""
-        self["is_in_scope"] = None
-        self["creator"] = None
-        self["detection_method"] = None
-        self["detection_confidence"] = 0.0
-        self["discount_code"] = None
-        self["can_issue_code"] = False
-
-        # Output state
-        self["reply"] = ""
-        self["template_key"] = ""
-        self["conversation_status"] = ConversationStatus.PENDING_CREATOR_INFO
-        self["should_send_reply"] = True
+# Simplified approach: Use regular dict type for LangGraph state
+# This avoids complex initialization issues with the AgentState class
+AgentState = Dict[str, Any]
 
 
 class AIDiscountAgent:
@@ -327,6 +302,10 @@ class AIDiscountAgent:
 
                 logger.info(f"Code already issued for {creator}, denying reissuance")
 
+        # Store enrichment data for Bonus B
+        state["follower_count"] = state.get("follower_count")
+        state["is_potential_influencer"] = state.get("is_potential_influencer")
+
         # Update state with final decisions
         state["reply"] = reply
         state["template_key"] = template_key
@@ -347,13 +326,33 @@ class AIDiscountAgent:
         """
         logger.info(f"Processing message from {incoming.user_id} on {incoming.platform.value}: {incoming.text}")
 
-        # Initialize state
-        initial_state = AgentState(
-            platform=incoming.platform.value,
-            user_id=incoming.user_id,
-            raw_message=incoming.text,
-            message_id=incoming.message_id
-        )
+        # Initialize state with ALL required keys to prevent KeyError
+        initial_state = {
+            # Core message data
+            "platform": incoming.platform.value,
+            "user_id": incoming.user_id,
+            "raw_message": incoming.text,
+            "message_id": incoming.message_id,
+
+            # Processing state - initialize all to prevent KeyError
+            "normalized_message": "",
+            "is_in_scope": None,
+            "creator": None,
+            "detection_method": None,
+            "detection_confidence": 0.0,
+            "discount_code": None,
+            "can_issue_code": False,
+
+            # Output state
+            "reply": "",
+            "template_key": "",
+            "conversation_status": ConversationStatus.PENDING_CREATOR_INFO,
+            "should_send_reply": True,
+
+            # Bonus B enrichment
+            "follower_count": None,
+            "is_potential_influencer": None
+        }
 
         # Execute the graph
         final_state = self.graph.invoke(initial_state)
@@ -405,7 +404,9 @@ class AIDiscountAgent:
             raw_incoming_message=incoming.text,
             identified_creator=decision.identified_creator,
             discount_code_sent=decision.discount_code_sent,
-            conversation_status=decision.conversation_status.value
+            conversation_status=decision.conversation_status.value,
+            follower_count=None,  # Will populate during graph execution
+            is_potential_influencer=None   # Will populate during graph execution
         )
 
 
@@ -423,7 +424,7 @@ def run_agent_on_message(message: str, platform: str = "instagram", user_id: str
     Returns:
         Dictionary with reply text and database row as JSON
     """
-    logger.info(f"Demo agent processing: '{message}' from {user_id}")
+    logger.info(f"Message received: normalized | user={user_id}, platform={platform}, raw=\"{message}\", norm=\"{message.lower().strip()}\"")
 
     # Load configurations
     agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")

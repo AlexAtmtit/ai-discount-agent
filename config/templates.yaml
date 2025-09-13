@@ -7,10 +7,10 @@ replies:
   
   already_sent_no_resend: "Thanks for reaching out! It looks like you've already gotten your code for this campaign. If this is a different campaign, please let me know which creator sent you. 😊"
   
-  ambiguous_multiple: "I see a few possible creators matched your message. Could you clarify which one sent you? casey_neistat, mkbhd, lily_singh, peter_mckinnon? 🤔"
+  ambiguous_multiple: "I see a few possible creators matched your message. Could you clarify which one sent you? 🤔"
 
-  out_of_scope: "Thanks for reaching out! This inbox is for creator discount codes. If you want a code, tell me which creator sent you (casey_neistat, mkbhd, lily_singh, peter_mckinnon)."
+  out_of_scope: "Thanks for reaching out! This inbox is for creator discount codes. Which creator sent you? 😊 "
 
   error: "Sorry, I'm having trouble processing your message right now. Please try again later or let me know which creator sent you! 🙏"
 
-  llm_fallback_timeout: "Sorry, I'm having trouble analyzing your message. Which creator sent you? I have codes for casey_neistat, mkbhd, lily_singh, peter_mckinnon."
+  llm_fallback_timeout: "Sorry, I'm having trouble analyzing your message. Which creator sent you?"
