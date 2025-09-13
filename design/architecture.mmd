@@ -1,0 +1,83 @@
+flowchart TD
+    subgraph "External Platforms"
+        IG[Instagram DM API]
+        TT[TikTok DM API]
+        WA[WhatsApp Business API]
+    end
+
+    subgraph "Webhook Layer"
+        WH[Webhook Receiver]
+        NORM[Message Normalizer]
+    end
+
+    subgraph "Processing Layer"
+        AGP[Agent Processor]
+        FPath[Fast Path Gate]
+        Worker[Background Worker]
+    end
+
+    subgraph "Core AI" as CoreAI
+        subgraph "Agent Logic"
+            INT[Detect Intent<br/>out_of_scope → ask]
+            DETEX[Exact Match<br/>aliases]
+            DETFZ[Fuzzy Match<br/>+ thresholds]
+            DETLLM[LLM Fallback<br/>Gemini 2.5 Flash]
+            DEC[Decide Action<br/>issue code or ask creator]
+        end
+
+        subgraph "Supporting"
+            ENR[Enrichment Engine<br/>follower_count, is_potential_influencer]
+            STORE[In-Memory Store<br/>mocked DB]
+            SEND[Reply Sender<br/>with circuit breaker]
+        end
+    end
+
+    subgraph "Admin & Analytics"
+        API[FastAPI]
+        SIM[/simulate Endpoint<br/>end-to-end testing]
+        WEB[/webhook/{platform}<br/>async processing]
+        ANA[/analytics/creators<br/>summary aggregation]
+        RELOAD[/admin/reload<br/>hot config update]
+    end
+
+    IG --> WH
+    TT --> WH
+    WA --> WH
+    WH --> NORM
+
+    NORM --> AGP
+    AGP --> FPath
+    FPath -->|exact alias & can issue| SEND
+    FPath -->|needs processing| Worker
+
+    Worker --> INT
+    INT -->|out_of_scope| SEND
+    INT -->|in_scope| DETEX
+    DETEX -->|exact hit| DEC
+    DETEX -->|no exact| DETFZ
+    DETFZ -->|confident match| DEC
+    DETFZ -->|low confidence| DETLLM
+    DETLLM -->|result| DEC
+    DETLLM -->|timeout/exhaust| DEC
+    DEC -->|need more info| SEND
+    DEC -->|can issue| ENR
+    ENR --> SEND
+    ENR --> STORE
+
+    STORE -.-> ANA
+    SEND -.->|reply| IG
+    SEND -.->|reply| TT
+    SEND -.->|reply| WA
+
+    SIM --> NORM
+    WEB --> NORM
+    ANA --> STORE
+    RELOAD -->|update configs| AGP
+
+    classDef external fill:#e1f5fe
+    classDef api fill:#f3e5f5
+    classDef core fill:#fff3e0
+
+    class IG,TT,WA external
+    class SIM,WEB,ANA,RELOAD api
+    class INT,DETEX,DETFZ,DETLLM,DEC core
