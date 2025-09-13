@@ -171,17 +171,19 @@ class AIDiscountAgent:
             logger.info(f"Exact match success: {creator}")
             state["creator"] = creator
             state["detection_method"] = detection_method
-            state["detection_confidence"] = 1.0
+            state["detection_confidence"] = 1.0  # Exact match = 100% confidence
             return state
 
         # Step 2: Fuzzy match
         fuzzy_result = self.matcher.fuzzy_match(message)
         if fuzzy_result:
             creator, confidence, detection_method = fuzzy_result
-            logger.info(f"Fuzzy match success: {creator} (confidence: {confidence:.2f})")
+            # Clamp confidence to 0-1 range to prevent Pydantic validation errors
+            clamped_confidence = max(0.0, min(1.0, confidence))
+            logger.info(f"Fuzzy match success: {creator} (confidence: {clamped_confidence:.3f})")
             state["creator"] = creator
             state["detection_method"] = detection_method
-            state["detection_confidence"] = confidence
+            state["detection_confidence"] = clamped_confidence
             return state
 
         # Step 3: LLM fallback
@@ -206,11 +208,23 @@ class AIDiscountAgent:
                         llm_result = loop.run_until_complete(async_llm_call())
 
                         if llm_result.creator:
-                            logger.info(f"LLM detection success: {llm_result.creator}")
+                            # Clamp LLM confidence to prevent validation errors
+                            clamped_llm_confidence = max(0.0, min(1.0, llm_result.detection_confidence))
+                            logger.info(f"✅ LLM SUCCESS: {llm_result.creator} "
+                                       f"(method=llm, attempts={llm_result.attempts}, "
+                                       f"latency={llm_result.total_latency_ms}ms, "
+                                       f"model={llm_result.model_version}, "
+                                       f"confidence={clamped_llm_confidence:.3f})")
                             state["creator"] = llm_result.creator
                             state["detection_method"] = llm_result.detection_method
-                            state["detection_confidence"] = llm_result.detection_confidence
+                            state["detection_confidence"] = clamped_llm_confidence
                             return state
+                        else:
+                            logger.info(f"LLM FAILURE: No creator detected after "
+                                       f"{llm_result.attempts} attempts "
+                                       f"({llm_result.total_latency_ms}ms, "
+                                       f"model={llm_result.model_version}) "
+                                       f"Reason: {llm_result.error_reason}")
                 except Exception as e:
                     logger.warning(f"LLM fallback failed: {e}")
 
@@ -387,7 +401,7 @@ class AIDiscountAgent:
         return InteractionRow(
             user_id=incoming.user_id,
             platform=incoming.platform.value,
-            ts=now_utc,
+            timestamp=now_utc,
             raw_incoming_message=incoming.text,
             identified_creator=decision.identified_creator,
             discount_code_sent=decision.discount_code_sent,

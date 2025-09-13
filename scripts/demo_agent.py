@@ -32,7 +32,11 @@ TEST_MESSAGES = [
     "discount",
     "What's up",
     "mkbhd discount code please",
-    "lily_singh sent me here"
+    "lily_singh sent me here",
+    "Marques Bronlee discount",  # Forces LLM fallback demo
+    "error_test",  # Forces error handling demo
+    "SteveCreator sent me here for discount",  # Forces LLM fallback for unknown creator
+    "hey, promo from marqes brwnli pls"  # Should trigger exact LLM success for mkbhd
 ]
 
 
@@ -52,12 +56,28 @@ def main():
             # Process the message
             result = run_agent_on_message(test_msg)
 
+            # Assert row shape (prevents regression of truncated output)
+            row = result['database_row']
+            required_fields = ['user_id', 'platform', 'timestamp', 'raw_incoming_message', 'identified_creator', 'discount_code_sent', 'conversation_status']
+            assert all(field in row for field in required_fields), f"Missing fields in row: {set(required_fields) - set(row.keys())}"
+            assert isinstance(row, dict), "Row must be dict"
+            assert len(row) == len(required_fields), f"Expected {len(required_fields)} fields, got {len(row)}"
+
             # Print results
             print("Reply:")
             print(f"  {result['reply']}")
             print("\nDatabase Row (JSON):")
-            for key, value in result['database_row'].items():
-                print(f"  {key}: {value}")
+            # Ensure all expected fields are present
+            row = result['database_row']
+            fields_to_show = [
+                'user_id', 'platform', 'timestamp', 'raw_incoming_message',
+                'identified_creator', 'discount_code_sent', 'conversation_status'
+            ]
+            for field in fields_to_show:
+                value = row.get(field, None)
+                if value is None:
+                    value = "None"
+                print(f"  {field}: {value}")
 
         except Exception as e:
             print(f"Error processing message: {e}")
@@ -65,8 +85,8 @@ def main():
         print("\n" + "=" * 50 + "\n")
 
     print("Demo complete!")
-    print("Note: This demo uses mocked detection and does not require a real database.")
-    print("For LLM fallback, set GOOGLE_API_KEY environment variable.")
+    print("Note: This demo runs rules-only unless GOOGLE_API_KEY is set for LLM fallback.")
+    print("(No real database needed - uses in-memory storage)")
 
 
 if __name__ == "__main__":

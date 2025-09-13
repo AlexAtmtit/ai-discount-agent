@@ -70,13 +70,13 @@ class InteractionRow(BaseModel):
     """Represents a database row for logging interactions"""
     user_id: str
     platform: str = Field(..., pattern='^(instagram|tiktok|whatsapp)$')
-    ts: str = Field(..., pattern=r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$')
+    timestamp: str = Field(..., pattern=r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$')
     raw_incoming_message: str
     identified_creator: Optional[str] = None
     discount_code_sent: Optional[str] = None
     conversation_status: str = Field(..., pattern='^(pending_creator_info|completed|error|out_of_scope)$')
 
-    @validator('ts', pre=True)
+    @validator('timestamp', pre=True)
     def ensure_utc_iso_format(cls, v):
         """Ensure timestamp is in ISO8601 UTC format"""
         if isinstance(v, datetime):
