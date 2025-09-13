@@ -76,6 +76,10 @@ class InteractionRow(BaseModel):
     discount_code_sent: Optional[str] = None
     conversation_status: str = Field(..., pattern='^(pending_creator_info|completed|error|out_of_scope)$')
 
+    # Bonus B: CRM enrichment fields
+    follower_count: Optional[int] = None
+    is_potential_influencer: Optional[bool] = None
+
     @validator('timestamp', pre=True)
     def ensure_utc_iso_format(cls, v):
         """Ensure timestamp is in ISO8601 UTC format"""
