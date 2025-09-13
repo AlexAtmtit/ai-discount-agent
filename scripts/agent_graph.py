@@ -1,0 +1,434 @@
+"""LangGraph agent pipeline for AI Discount Agent
+
+This module implements the AI agent's decision flow using LangGraph.
+The agent processes messages through a series of nodes: intent detection,
+creator identification, enrichment, and final decision making.
+"""
+
+import logging
+import yaml
+from datetime import datetime, timezone
+from typing import Dict, Any, Optional
+
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables import RunnableLambda
+
+from scripts.models import (
+    IncomingMessage,
+    AgentDecision,
+    InteractionRow,
+    DetectionMethod,
+    ConversationStatus
+)
+from scripts.detection import CreatorMatcher, normalize_text
+from scripts.gemini_client import get_gemini_client, LLMResult
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+
+class AgentState(Dict[str, Any]):
+    """State object for LangGraph agent
+
+    This dictionary holds all intermediate state during message processing.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Core message data
+        self["platform"] = kwargs.get("platform")
+        self["user_id"] = kwargs.get("user_id")
+        self["raw_message"] = kwargs.get("raw_message")
+        self["message_id"] = kwargs.get("message_id")
+
+        # Processing state
+        self["normalized_message"] = ""
+        self["is_in_scope"] = None
+        self["creator"] = None
+        self["detection_method"] = None
+        self["detection_confidence"] = 0.0
+        self["discount_code"] = None
+        self["can_issue_code"] = False
+
+        # Output state
+        self["reply"] = ""
+        self["template_key"] = ""
+        self["conversation_status"] = ConversationStatus.PENDING_CREATOR_INFO
+        self["should_send_reply"] = True
+
+
+class AIDiscountAgent:
+    """LangGraph-based AI agent for discount code distribution"""
+
+    def __init__(self, campaign_config_path: str, templates_path: str):
+        """Initialize the agent with configuration
+
+        Args:
+            campaign_config_path: Path to YAML campaign config
+            templates_path: Path to YAML templates config
+        """
+        with open(campaign_config_path, 'r') as f:
+            self.campaign_config = yaml.safe_load(f)
+
+        with open(templates_path, 'r') as f:
+            self.templates = yaml.safe_load(f)['replies']
+
+        self.matcher = CreatorMatcher(self.campaign_config)
+
+        # Build the LangGraph
+        self.graph = self._build_graph()
+
+    def _build_graph(self) -> StateGraph:
+        """Build and compile the LangGraph
+
+        Returns:
+            Compiled StateGraph ready for execution
+        """
+        # Define the graph structure
+        workflow = StateGraph(AgentState)
+
+        # Add nodes (functions that process the state)
+        workflow.add_node("normalize", RunnableLambda(self._normalize_node))
+        workflow.add_node("detect_intent", RunnableLambda(self._detect_intent_node))
+        workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node))
+        workflow.add_node("enrich_creator", RunnableLambda(self._enrich_creator_node))
+        workflow.add_node("decide_response", RunnableLambda(self._decide_response_node))
+
+        # Define flow
+        workflow.set_entry_point("normalize")
+        workflow.add_edge("normalize", "detect_intent")
+
+        # Add conditional edges
+        workflow.add_conditional_edges(
+            "detect_intent",
+            lambda state: state["is_in_scope"],
+            {
+                True: "detect_creator",
+                False: "decide_response"
+            }
+        )
+
+        # Creator detection always goes to enrichment (or skip if no creator)
+        workflow.add_edge("detect_creator", "enrich_creator")
+        workflow.add_edge("enrich_creator", "decide_response")
+
+        # End at decision
+        workflow.add_edge("decide_response", END)
+
+        # Compile the graph
+        return workflow.compile()
+
+    def _normalize_node(self, state: AgentState) -> AgentState:
+        """Normalize the incoming message
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            Updated state with normalized message
+        """
+        raw_message = state["raw_message"]
+        normalized = normalize_text(raw_message)
+
+        logger.info(f"Normalized message: '{raw_message}' -> '{normalized}'")
+
+        state["normalized_message"] = normalized
+        return state
+
+    def _detect_intent_node(self, state: AgentState) -> AgentState:
+        """Detect if message is related to discount requests
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            Updated state with intent classification
+        """
+        message = state["normalized_message"]
+        is_in_scope = self.matcher.is_in_scope(message)
+
+        logger.info(f"Intent detection: '{message}' -> in_scope={is_in_scope}")
+        logger.info(f"Graph flow: normalized message processed, deciding next step")
+
+        state["is_in_scope"] = is_in_scope
+        return state
+
+    def _detect_creator_node(self, state: AgentState) -> AgentState:
+        """Detect which creator sent the discount code
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            Updated state with creator detection results
+        """
+        message = state["normalized_message"]
+
+        # Step 1: Exact match
+        result = self.matcher.exact_match(message)
+        if result:
+            creator, detection_method = result
+            logger.info(f"Exact match success: {creator}")
+            state["creator"] = creator
+            state["detection_method"] = detection_method
+            state["detection_confidence"] = 1.0
+            return state
+
+        # Step 2: Fuzzy match
+        fuzzy_result = self.matcher.fuzzy_match(message)
+        if fuzzy_result:
+            creator, confidence, detection_method = fuzzy_result
+            logger.info(f"Fuzzy match success: {creator} (confidence: {confidence:.2f})")
+            state["creator"] = creator
+            state["detection_method"] = detection_method
+            state["detection_confidence"] = confidence
+            return state
+
+        # Step 3: LLM fallback
+        if self.campaign_config['flags'].get('enable_llm_fallback', True):
+            gemini_client = get_gemini_client()
+            if gemini_client:
+                logger.info("Attempting LLM fallback for creator detection")
+
+                # Note: This is a simplified version - in production this would be async
+                # For the demo, we'll simulate synchronous call
+                import asyncio
+
+                async def async_llm_call():
+                    llm_result = await gemini_client.detect_creator(message)
+                    return llm_result
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        logger.warning("LLM fallback skipped: event loop already running")
+                    else:
+                        llm_result = loop.run_until_complete(async_llm_call())
+
+                        if llm_result.creator:
+                            logger.info(f"LLM detection success: {llm_result.creator}")
+                            state["creator"] = llm_result.creator
+                            state["detection_method"] = llm_result.detection_method
+                            state["detection_confidence"] = llm_result.detection_confidence
+                            return state
+                except Exception as e:
+                    logger.warning(f"LLM fallback failed: {e}")
+
+        logger.info("No creator detected, will ask user")
+        return state
+
+    def _enrich_creator_node(self, state: AgentState) -> AgentState:
+        """Generate enrichment data for the creator (Bonus B)
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            Updated state with enrichment data
+        """
+        creator = state["creator"]
+
+        if not creator:
+            return state
+
+        # Generate deterministic enrichment based on creator handle
+        # This simulates CRM data lookup
+
+        # Hash creator name to generate pseudo-random but deterministic data
+        creator_hash = hash(creator) % 100000
+
+        follower_count = 10000 + (creator_hash % 900000)  # 10k to 910k followers
+        is_potential_influencer = follower_count > 50000 or (creator_hash % 10) > 7
+
+        logger.info(f"Enrichment for {creator}: {follower_count} followers, "
+                   f"potential_influencer={is_potential_influencer}")
+
+        state["follower_count"] = follower_count
+        state["is_potential_influencer"] = is_potential_influencer
+
+        return state
+
+    def _decide_response_node(self, state: AgentState) -> AgentState:
+        """Make final decision about response and conversation status
+
+        Args:
+            state: Current agent state
+
+        Returns:
+            Updated state with final decision
+        """
+        is_in_scope = state["is_in_scope"]
+        creator = state["creator"]
+        detection_method = state["detection_method"]
+
+        if not is_in_scope:
+            # Out of scope message
+            reply = self.templates["out_of_scope"]
+            template_key = "out_of_scope"
+            status = ConversationStatus.OUT_OF_SCOPE
+            discount_code = None
+            should_send_reply = True
+
+        elif not creator:
+            # In scope but no creator identified
+            reply = self.templates["ask_creator"]
+            template_key = "ask_creator"
+            status = ConversationStatus.PENDING_CREATOR_INFO
+            discount_code = None
+            should_send_reply = True
+
+        else:
+            # Creator detected - check if we can issue code
+            platform = state["platform"]
+            user_id = state["user_id"]
+
+            # Import here to avoid circular imports
+            from scripts.store import get_store
+
+            store = get_store()
+            can_issue = store.can_issue_code(platform, user_id)
+
+            if can_issue:
+                # Issue the discount code
+                code = self.campaign_config['creators'][creator]['code']
+                reply = self.templates["issue_code"].format(
+                    creator_handle=creator,
+                    discount_code=code
+                )
+                template_key = "issue_code"
+                status = ConversationStatus.COMPLETED
+                discount_code = code
+                should_send_reply = True
+
+                logger.info(f"Issuing code {code} for creator {creator}")
+
+            else:
+                # Already issued code before - can't issue again
+                code = self.campaign_config['creators'][creator]['code']
+                reply = self.templates["already_sent_no_resend"]
+                template_key = "already_sent_no_resend"
+                status = ConversationStatus.PENDING_CREATOR_INFO
+                discount_code = None
+                should_send_reply = True
+
+                logger.info(f"Code already issued for {creator}, denying reissuance")
+
+        # Update state with final decisions
+        state["reply"] = reply
+        state["template_key"] = template_key
+        state["conversation_status"] = status
+        state["discount_code"] = discount_code
+        state["should_send_reply"] = should_send_reply
+
+        return state
+
+    def process_message(self, incoming: IncomingMessage) -> AgentDecision:
+        """Process an incoming message through the agent pipeline
+
+        Args:
+            incoming: Incoming message to process
+
+        Returns:
+            Agent decision with reply and interaction data
+        """
+        logger.info(f"Processing message from {incoming.user_id} on {incoming.platform.value}: {incoming.text}")
+
+        # Initialize state
+        initial_state = AgentState(
+            platform=incoming.platform.value,
+            user_id=incoming.user_id,
+            raw_message=incoming.text,
+            message_id=incoming.message_id
+        )
+
+        # Execute the graph
+        final_state = self.graph.invoke(initial_state)
+
+        # Extract results
+        creator = final_state["creator"]
+        detection_method = final_state["detection_method"]
+        confidence = final_state["detection_confidence"]
+        reply = final_state["reply"]
+        template_key = final_state["template_key"]
+        status = final_state["conversation_status"]
+        discount_code = final_state["discount_code"]
+        is_potential = final_state.get("is_potential_influencer", None)
+
+        # Create AgentDecision
+        decision = AgentDecision(
+            reply_text=reply,
+            template_key=template_key,
+            identified_creator=creator,
+            detection_method=detection_method,
+            detection_confidence=confidence,
+            discount_code_sent=discount_code,
+            conversation_status=status,
+            is_potential_influencer=is_potential
+        )
+
+        logger.info(f"Agent decision: creator={creator}, status={status.value}, "
+                   f"code={discount_code}, method={detection_method}")
+
+        return decision
+
+    def create_interaction_row(self, incoming: IncomingMessage, decision: AgentDecision) -> InteractionRow:
+        """Create database interaction row from message and decision
+
+        Args:
+            incoming: Original incoming message
+            decision: Agent decision result
+
+        Returns:
+            InteractionRow for database storage
+        """
+        # Use the model's validator to format the timestamp correctly
+        now_utc = datetime.now(timezone.utc)
+
+        return InteractionRow(
+            user_id=incoming.user_id,
+            platform=incoming.platform.value,
+            ts=now_utc,
+            raw_incoming_message=incoming.text,
+            identified_creator=decision.identified_creator,
+            discount_code_sent=decision.discount_code_sent,
+            conversation_status=decision.conversation_status.value
+        )
+
+
+def run_agent_on_message(message: str, platform: str = "instagram", user_id: str = "demo_user") -> Dict[str, Any]:
+    """Run the agent on a demo message
+
+    This is the function required by Step 2 of the assignment.
+    It takes a plain string message and returns reply + database row JSON.
+
+    Args:
+        message: Plain text message to process
+        platform: Social media platform (default: instagram)
+        user_id: User identifier (default: demo_user)
+
+    Returns:
+        Dictionary with reply text and database row as JSON
+    """
+    logger.info(f"Demo agent processing: '{message}' from {user_id}")
+
+    # Load configurations
+    agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
+
+    # Create incoming message
+    incoming = IncomingMessage(
+        platform=platform if isinstance(platform, str) else platform,
+        user_id=user_id,
+        text=message
+    )
+
+    # Process through agent
+    decision = agent.process_message(incoming)
+
+    # Create interaction row
+    row = agent.create_interaction_row(incoming, decision)
+
+    # Return result as required by assignment
+    return {
+        "reply": decision.reply_text,
+        "database_row": row.dict()
+    }

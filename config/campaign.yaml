@@ -1,0 +1,48 @@
+creators:
+  casey_neistat:
+    code: CASEY15OFF
+    aliases:
+      - casey
+      - neistat
+      - casey neistat
+      - "@casey"
+      - "@neistat"
+      - Casey Neistat
+    threshold: 0.7
+  mkbhd:
+    code: MARQUES20
+    aliases:
+      - marques
+      - brownlee
+      - mkbhd
+      - "@mkbhd"
+      - Marques Brownlee
+    threshold: 0.7
+  lily_singh:
+    code: LILY25
+    aliases:
+      - lily
+      - singh
+      - lilysuperwoman
+      - "@lilysuperwoman"
+      - Lily Singh
+    threshold: 0.7
+  peter_mckinnon:
+    code: PETERSVLOG
+    aliases:
+      - peter
+      - mckinnon
+      - petermckinnon24
+      - "@petermckinnon24"
+      - Peter McKinnon
+    threshold: 0.7
+
+thresholds:
+  fuzzy_accept: 0.8
+  fuzzy_reject: 0.6
+  detection_confidence_low: 0.7
+
+flags:
+  enable_intent_detection: true
+  enable_fuzzy_matching: true
+  enable_llm_fallback: true
