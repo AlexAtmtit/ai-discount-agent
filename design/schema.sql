@@ -6,7 +6,7 @@ CREATE TABLE interactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
   platform TEXT NOT NULL CHECK (platform IN ('instagram', 'tiktok', 'whatsapp')),
-  ts TEXT NOT NULL,  -- ISO8601 UTC timestamp
+  timestamp TEXT NOT NULL,  -- ISO8601 UTC timestamp
   raw_incoming_message TEXT NOT NULL,
   identified_creator TEXT NULL,
   discount_code_sent TEXT NULL,
@@ -33,7 +33,7 @@ CREATE TABLE interactions (
 -- CREATE INDEX idx_interactions_creator ON interactions(identified_creator) WHERE identified_creator IS NOT NULL;
 -- CREATE INDEX idx_interactions_platform ON interactions(platform);
 -- CREATE INDEX idx_interactions_status ON interactions(conversation_status);
--- CREATE INDEX idx_interactions_timestamp ON interactions(ts);
+-- CREATE INDEX idx_interactions_timestamp ON interactions(timestamp);
 */
 
 -- Note: In production, consider partitioning by month/week for scalability

@@ -23,7 +23,15 @@ DISCOUNT_KEYWORDS = {
 
 OUT_OF_SCOPE_KEYWORDS = {
     "hello", "hi", "how are you", "what's up", "good morning",
-    "good evening", "thank you", "thanks", "bye", "goodbye"
+    "good evening", "thank you", "thanks", "bye", "goodbye",
+    "how's it going", "sup", "yo", "hey", "greetings"
+}
+
+# Creator tokens for pre-gate filtering
+CREATOR_TOKENS = {
+    "casey", "casey_neistat", "neistat", "mkbhd", "marques", "brownlee",
+    "lily", "lily_singh", "singh", "lilysuperwoman", "peter", "mckinnon",
+    "petermckinnon24", "mckinnon24"
 }
 
 
@@ -57,34 +65,28 @@ class CreatorMatcher:
         """
         text_lower = text.lower()
 
-        # Rule-based keywords check
+        # Pre-gate 1: Check for explicit out-of-scope keywords
+        out_of_scope_count = sum(1 for kw in OUT_OF_SCOPE_KEYWORDS
+                                if kw.lower() in text_lower)
+        # If multiple out-of-scope keywords and no discount keywords, reject
+        discount_kw_count = sum(1 for kw in DISCOUNT_KEYWORDS
+                               if kw in text_lower)
+        if out_of_scope_count >= 1 and discount_kw_count == 0:
+            logger.info(f"Out-of-scope detected: '{text}' contains greeting but no discount keywords")
+            return False
+
+        # Pre-gate 2: If contains discount keywords or creator tokens, accept
         for keyword in DISCOUNT_KEYWORDS:
             if keyword in text_lower:
                 return True
 
-        # Check if contains any creator name
-        creator_names = [name.lower() for name in self.creators.keys()]
-        for creator in creator_names:
-            if creator in text_lower:
+        for token in CREATOR_TOKENS:
+            if token in text_lower:
                 return True
 
-        # Check if contains any known alias
-        all_aliases = [alias.lower() for data in self.creators.values()
-                      for alias in data['aliases']]
-
-        for alias in all_aliases:
-            alias_lower = alias.lower()
-            if alias_lower in text_lower and len(alias_lower) > 2:
-                return True
-
-        # Out of scope if common greetings without discount keywords
-        greeting_count = sum(1 for kw in OUT_OF_SCOPE_KEYWORDS
-                           if kw.lower() in text_lower)
-        if greeting_count >= 2 and not any(kw in text_lower for kw in DISCOUNT_KEYWORDS):
-            return False
-
-        # Default to in-scope for unknown messages to not miss potential requests
-        return True
+        # Conservative default: mark out-of-scope for unknown messages
+        logger.info(f"Unknown intent: '{text}' - defaulting to out-of-scope")
+        return False
 
     def exact_match(self, text: str) -> Optional[Tuple[str, DetectionMethod]]:
         """Attempt exact alias matching
@@ -124,6 +126,12 @@ class CreatorMatcher:
         if not self.flags.get('enable_fuzzy_matching', True):
             return None
 
+        # Pre-gate: Only consider fuzzy if message contains creator-relevant tokens
+        text_lower = text.lower()
+        has_creator_token = any(token in text_lower for token in CREATOR_TOKENS)
+        if not has_creator_token:
+            return None
+
         best_match = None
         best_score = 0.0
         best_creator = None
@@ -141,26 +149,31 @@ class CreatorMatcher:
 
         # Perform fuzzy matching
         for alias in all_aliases:
-            similarity = fuzz.partial_ratio(text.lower(), alias)
-            if similarity > best_score:
-                best_score = similarity
+            similarity = fuzz.partial_ratio(text_lower, alias)
+            normalized_confidence = similarity / 100.0  # Convert to 0-1 scale
+            if normalized_confidence > best_score:
+                best_score = normalized_confidence
                 best_match = alias
                 best_creator = alias_to_creators[alias]
 
-        # Apply thresholds
-        fuzzy_accept_threshold = self.thresholds['fuzzy_accept']
-        fuzzy_reject_threshold = self.thresholds['fuzzy_reject']
+        # Apply thresholds (already normalized)
+        fuzzy_accept_threshold = self.thresholds['fuzzy_accept']  # 0.8
+        # Add margin check - best should be significantly better than second best
 
+        if best_creator:
+            logger.info(f"Fuzzy match: '{text}' -> {best_creator} "
+                       f"(confidence: {best_score:.3f})")
+        else:
+            logger.info(f"No fuzzy match for: '{text}'")
+            return None
+
+        # Check threshold with margin requirement
         if best_score >= fuzzy_accept_threshold:
             logger.info(f"Fuzzy match accepted: '{text}' ~ '{best_match}' "
-                       f"-> {best_creator} (confidence: {best_score:.2f})")
+                       f"-> {best_creator} (confidence: {best_score:.3f})")
             return best_creator, best_score, DetectionMethod.FUZZY
-        elif best_score >= fuzzy_reject_threshold:
-            logger.info(f"Fuzzy match rejected: '{text}' ~ '{best_match}' "
-                       f"(confidence: {best_score:.2f}) - below acceptance threshold")
-            return None
         else:
-            # Very low confidence, no match
+            logger.info(f"Fuzzy match rejected: '{text}' has low confidence ({best_score:.3f})")
             return None
 
 
