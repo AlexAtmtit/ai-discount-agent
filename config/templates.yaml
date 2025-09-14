@@ -5,7 +5,7 @@ replies:
   
   already_sent_resend: "You already received this code! Here's your code from {creator_handle}: {discount_code}"
   
-  already_sent_no_resend: "Thanks for reaching out! It looks like you've already gotten your code for this campaign. If this is a different campaign, please let me know which creator sent you. 😊"
+  already_sent_no_resend: "Thanks for reaching out! It looks like you've already sent/received a code for this campaign. If this is a different campaign, please let me know which creator sent you. 😊"
   
   ambiguous_multiple: "I see a few possible creators matched your message. Could you clarify which one sent you? 🤔"
 

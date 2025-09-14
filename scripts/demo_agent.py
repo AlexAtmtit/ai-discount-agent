@@ -9,12 +9,13 @@ Features:
 - Production-grade AI agent demonstration
 - Comprehensive test coverage (15+ scenarios)
 
-Usage: python scripts/demo_agent.py
+Usage: python scripts/demo_agent.py [--explain] [--reset] [--mock-llm {success,none}]
 """
 
 import logging
 import sys
 import os
+import argparse
 
 # Add the project root directory to Python path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,7 +23,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import REAL AI agent and models (not simulation)
 from scripts.agent_graph import AIDiscountAgent
 from scripts.models import IncomingMessage, InteractionRow, DetectionMethod, ConversationStatus
-from scripts.gemini_client import get_gemini_client
+from scripts.store import get_store
+from scripts.gemini_client import LLMResult
 from datetime import datetime, timezone
 import yaml
 import asyncio
@@ -58,29 +60,13 @@ TEST_CASES = [
     ("nice video", "Out of scope", "Intent filter - no discount mention")
 ]
 
-def check_llm_availability():
-    """Check if LLM API is available and initialize client"""
-    try:
-        gemini_client = get_gemini_client()
-        if gemini_client is None:
-            print("⚠️ LLM API UNAVAILABLE: No API key or configuration issues")
-            print("   • Reason: GOOGLE_API_KEY environment variable not set")
-            print("   • Impact: LLM tests will run but fallback to ask-user responses")
-            print("   • Status: Continuing with rules-based processing...\n")
-            return False
-        else:
-            print("✅ LLM API AVAILABLE: Gemini client initialized")
-            print("   • API Key: Configured")
-            print("   • Model: Gemini-2.5-Flash-Lite")
-            print("   • Timeout: 2.5s per attempt")
-            print("   • Status: Ready for real LLM calls\n")
-            return True
-    except Exception as e:
-        print(f"⚠️ LLM API UNAVAILABLE: Configuration error - {e}")
-        print("   • Continuing with rules-based processing only\n")
-        return False
-
 def main():
+    parser = argparse.ArgumentParser(description="AI Discount Agent Demo")
+    parser.add_argument("--explain", action="store_true", help="Print agent trace (explain mode)")
+    parser.add_argument("--reset", action="store_true", help="Reset in-memory store before running")
+    parser.add_argument("--mock-llm", choices=["success", "none"], help="Mock LLM fallback outcome (no real API calls)")
+    args = parser.parse_args()
+
     print("AI DISCOUNT AGENT - ASSIGNMENT DEMONSTRATION")
     print("=" * 70)
     print("Using: AIDiscountAgent (Real Processing Pipeline)")
@@ -89,25 +75,74 @@ def main():
     print("=" * 70)
     print()
 
+    # Reset store if requested
+    if args.reset:
+        get_store().clear_data()
+        print("💾 Store reset: cleared previous interactions.\n")
+
+    # Mock LLM if requested and clearly label it
+    mock_llm_note = None
+    if args.mock_llm:
+        import scripts.gemini_client as gc
+
+        class FakeGeminiClient:
+            async def detect_creator(self, message: str) -> LLMResult:
+                if args.mock_llm == "success":
+                    return LLMResult(
+                        creator="mkbhd",
+                        detection_method=DetectionMethod.LLM,
+                        detection_confidence=0.8,
+                        model_version="mock-llm",
+                        attempts=1,
+                        total_latency_ms=10,
+                        error_reason=None,
+                    )
+                else:
+                    return LLMResult(
+                        creator=None,
+                        detection_method=DetectionMethod.LLM,
+                        detection_confidence=0.0,
+                        model_version="mock-llm",
+                        attempts=1,
+                        total_latency_ms=10,
+                        error_reason="mock_none",
+                    )
+
+        gc.get_gemini_client = lambda: FakeGeminiClient()
+        mock_llm_note = f"MOCK LLM ACTIVE: outcome={args.mock_llm}"
+
+    # Set explain mode flag for downstream printing
+    if args.explain:
+        os.environ["DEMO_EXPLAIN"] = "1"
+
     # Initialize success counter
     success_count = 0
     total_tests = len(TEST_CASES)
-
-    # Check LLM API availability
-    llm_available = check_llm_availability()
 
     # Initialize REAL AI agent (not simulation)
     try:
         print("🚀 Initializing AI Discount Agent...")
         agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
         print("✅ Agent initialized successfully!\n")
+        # Print active config thresholds/flags
+        with open("config/campaign.yaml", "r") as f:
+            cfg = yaml.safe_load(f)
+        thresholds = cfg.get("thresholds", {})
+        flags = cfg.get("flags", {})
+        print("CONFIG:")
+        print(f"  fuzzy_accept: {thresholds.get('fuzzy_accept')}")
+        print(f"  enable_llm_fallback: {flags.get('enable_llm_fallback')}")
+        if mock_llm_note:
+            print(f"  {mock_llm_note}")
+        print()
     except Exception as e:
         print(f"❌ Failed to initialize agent: {e}")
         return
 
     for i, (message, expected_code, description) in enumerate(TEST_CASES, 1):
         print(f"🎯 TEST CASE {i}: {description}")
-        print(f"📨 INPUT: \"{message}\"")
+        print("INPUT:")
+        print(f"  {message}")
         print("-" * 40)
 
         # Process message using REAL AI AGENT (not simulation)
@@ -149,8 +184,8 @@ def main():
 
         print()  # Add spacing
 
-        # Show METHOD DETECTION DETAILS - Fix method determination
-        print("🔍 METHOD USED:")
+        # Show METHOD DETECTION DETAILS
+        print("METHOD:")
         method = result.get('method', 'unknown')
 
         if method == 'exact':
@@ -181,13 +216,13 @@ def main():
             print(f"   🔧 {method.upper()}: Detection method identified")
         print()
 
-        print("💬 REPLY:")
-        print(f"   {result['reply']}")
+        print("REPLY:")
+        print(f"  {result['reply']}")
         print()
 
-        print("💾 DATABASE ROW:")
+        print("ROW:")
 
-        # Create database row (Step 3 compliance)
+        # Create database row (Step 3 compliance) and persist
         now = datetime.now(timezone.utc)
         row = InteractionRow(
             user_id="demo_user",
@@ -200,6 +235,8 @@ def main():
             follower_count=_get_demo_followers(result['creator']) if result['creator'] else None,
             is_potential_influencer=_get_demo_influencer(result['creator']) if result['creator'] else None
         )
+        # Persist
+        get_store().store_interaction(row)
 
         # Show required fields (Step 3 compliance)
         required_fields = [
@@ -211,16 +248,44 @@ def main():
             value = row.__dict__.get(field)
             if field == 'timestamp':
                 value = now.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-            print(f"   {field}: {value}")
+            print(f"  {field}: {value}")
 
         # Show Bonus B fields
         if result['creator']:
             follower_count = _get_demo_followers(result['creator'])
             is_potential = _get_demo_influencer(result['creator'])
-            print(f"   follower_count: {follower_count}         (Bonus B: CRM enrichment)")
-            print(f"   is_potential_influencer: {is_potential}  (Bonus B: Influencer detection)")
+            print(f"  follower_count: {follower_count}         (Bonus B: CRM enrichment)")
+            print(f"  is_potential_influencer: {is_potential}  (Bonus B: Influencer detection)")
+
+        # Trace in explain mode
+        if 'trace' in result and result['trace']:
+            from argparse import Namespace
+            # Only print if --explain is enabled
+            # We can't access args here directly, so detect via env toggle
+            if os.environ.get("DEMO_EXPLAIN", "0") == "1":
+                print()
+                print("TRACE:")
+                for step in result['trace']:
+                    print(f"  - {step}")
+
+        # Notes for mock LLM
+        if os.environ.get("DEMO_EXPLAIN", "0") == "1" and mock_llm_note:
+            print()
+            print("NOTES:")
+            print(f"  {mock_llm_note}")
 
         print("\n" + "=" * 60 + "\n")
+
+    # Print analytics summary at end
+    summary = get_store().get_analytics()
+    print("ANALYTICS SUMMARY:")
+    print(f"  total_creators: {summary.total_creators}")
+    print(f"  total_requests: {summary.total_requests}")
+    print(f"  total_completed: {summary.total_completed}")
+    if summary.creators:
+        print("  by creator:")
+        for creator, stats in summary.creators.items():
+            print(f"   - {creator}: requests={stats.total_requests}, completed={stats.total_completed}")
 
 
 def _get_demo_followers(creator):

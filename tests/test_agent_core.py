@@ -66,7 +66,7 @@ def test_database_row_structure():
     row = result["database_row"]
 
     required_fields = [
-        "user_id", "platform", "ts", "raw_incoming_message",
+        "user_id", "platform", "timestamp", "raw_incoming_message",
         "identified_creator", "discount_code_sent", "conversation_status"
     ]
 
@@ -76,10 +76,10 @@ def test_database_row_structure():
     # Check data types
     assert isinstance(row["user_id"], str)
     assert isinstance(row["platform"], str)
-    assert isinstance(row["ts"], str)
+    assert isinstance(row["timestamp"], str)
     assert isinstance(row["raw_incoming_message"], str)
-    assert len(row["ts"]) > 0
-    assert row["ts"].endswith("Z")
+    assert len(row["timestamp"]) > 0
+    assert row["timestamp"].endswith("Z")
 
 
 def test_platform_handling():

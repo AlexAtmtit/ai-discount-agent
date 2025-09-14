@@ -9,6 +9,8 @@ import logging
 import yaml
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
+from uuid import uuid4
+from typing import List
 
 from langgraph.graph import StateGraph, END
 from langchain_core.runnables import RunnableLambda
@@ -50,10 +52,11 @@ class AIDiscountAgent:
 
         self.matcher = CreatorMatcher(self.campaign_config)
 
-        # Build the LangGraph
-        self.graph = self._build_graph()
+        # Build the LangGraph (sync and async variants)
+        self.graph = self._build_graph(async_mode=False)
+        self.graph_async = self._build_graph(async_mode=True)
 
-    def _build_graph(self) -> StateGraph:
+    def _build_graph(self, async_mode: bool = False) -> StateGraph:
         """Build and compile the LangGraph
 
         Returns:
@@ -65,7 +68,11 @@ class AIDiscountAgent:
         # Add nodes (functions that process the state)
         workflow.add_node("normalize", RunnableLambda(self._normalize_node))
         workflow.add_node("detect_intent", RunnableLambda(self._detect_intent_node))
-        workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node))
+        # Use async detect_creator when in async mode
+        if async_mode:
+            workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node_async))
+        else:
+            workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node))
         workflow.add_node("enrich_creator", RunnableLambda(self._enrich_creator_node))
         workflow.add_node("decide_response", RunnableLambda(self._decide_response_node))
 
@@ -108,6 +115,8 @@ class AIDiscountAgent:
         logger.info(f"Normalized message: '{raw_message}' -> '{normalized}'")
 
         state["normalized_message"] = normalized
+        # Trace
+        state.setdefault("trace", []).append(f"normalize: '{raw_message}' -> '{normalized}'")
         return state
 
     def _detect_intent_node(self, state: AgentState) -> AgentState:
@@ -126,6 +135,8 @@ class AIDiscountAgent:
         logger.info(f"Graph flow: normalized message processed, deciding next step")
 
         state["is_in_scope"] = is_in_scope
+        # Trace
+        state.setdefault("trace", []).append(f"intent: {'in_scope' if is_in_scope else 'out_of_scope'}")
         return state
 
     def _detect_creator_node(self, state: AgentState) -> AgentState:
@@ -147,6 +158,7 @@ class AIDiscountAgent:
             state["creator"] = creator
             state["detection_method"] = detection_method
             state["detection_confidence"] = 1.0  # Exact match = 100% confidence
+            state.setdefault("trace", []).append(f"exact: {creator}")
             return state
 
         # Step 2: Fuzzy match
@@ -159,7 +171,10 @@ class AIDiscountAgent:
             state["creator"] = creator
             state["detection_method"] = detection_method
             state["detection_confidence"] = clamped_confidence
+            state.setdefault("trace", []).append(f"fuzzy: {creator} ({clamped_confidence:.2f})")
             return state
+        else:
+            state.setdefault("trace", []).append("fuzzy: none")
 
         # Step 3: LLM fallback
         if self.campaign_config['flags'].get('enable_llm_fallback', True):
@@ -193,6 +208,9 @@ class AIDiscountAgent:
                             state["creator"] = llm_result.creator
                             state["detection_method"] = llm_result.detection_method
                             state["detection_confidence"] = clamped_llm_confidence
+                            state.setdefault("trace", []).append(
+                                f"llm: {llm_result.creator} ({clamped_llm_confidence:.2f}), attempts={llm_result.attempts}"
+                            )
                             return state
                         else:
                             logger.info(f"LLM FAILURE: No creator detected after "
@@ -200,10 +218,69 @@ class AIDiscountAgent:
                                        f"({llm_result.total_latency_ms}ms, "
                                        f"model={llm_result.model_version}) "
                                        f"Reason: {llm_result.error_reason}")
+                            state.setdefault("trace", []).append(
+                                f"llm: none (reason={llm_result.error_reason})"
+                            )
                 except Exception as e:
                     logger.warning(f"LLM fallback failed: {e}")
+                    state.setdefault("trace", []).append(f"llm: error ({e})")
+            else:
+                state.setdefault("trace", []).append("llm: disabled/no_key")
 
         logger.info("No creator detected, will ask user")
+        return state
+
+    async def _detect_creator_node_async(self, state: AgentState) -> AgentState:
+        """Async version to support LLM fallback in async contexts"""
+        message = state["normalized_message"]
+
+        # Step 1: Exact match
+        result = self.matcher.exact_match(message)
+        if result:
+            creator, detection_method = result
+            state["creator"] = creator
+            state["detection_method"] = detection_method
+            state["detection_confidence"] = 1.0
+            state.setdefault("trace", []).append(f"exact: {creator}")
+            return state
+
+        # Step 2: Fuzzy match
+        fuzzy_result = self.matcher.fuzzy_match(message)
+        if fuzzy_result:
+            creator, confidence, detection_method = fuzzy_result
+            clamped_confidence = max(0.0, min(1.0, confidence))
+            state["creator"] = creator
+            state["detection_method"] = detection_method
+            state["detection_confidence"] = clamped_confidence
+            state.setdefault("trace", []).append(f"fuzzy: {creator} ({clamped_confidence:.2f})")
+            return state
+        else:
+            state.setdefault("trace", []).append("fuzzy: none")
+
+        # Step 3: LLM fallback
+        if self.campaign_config['flags'].get('enable_llm_fallback', True):
+            gemini_client = get_gemini_client()
+            if gemini_client:
+                try:
+                    llm_result = await gemini_client.detect_creator(message)
+                    if llm_result.creator:
+                        clamped_llm_confidence = max(0.0, min(1.0, llm_result.detection_confidence))
+                        state["creator"] = llm_result.creator
+                        state["detection_method"] = llm_result.detection_method
+                        state["detection_confidence"] = clamped_llm_confidence
+                        state.setdefault("trace", []).append(
+                            f"llm: {llm_result.creator} ({clamped_llm_confidence:.2f}), attempts={llm_result.attempts}"
+                        )
+                        return state
+                    else:
+                        state.setdefault("trace", []).append(
+                            f"llm: none (reason={llm_result.error_reason})"
+                        )
+                except Exception as e:
+                    state.setdefault("trace", []).append(f"llm: error ({e})")
+            else:
+                state.setdefault("trace", []).append("llm: disabled/no_key")
+
         return state
 
     def _enrich_creator_node(self, state: AgentState) -> AgentState:
@@ -257,6 +334,7 @@ class AIDiscountAgent:
             status = ConversationStatus.OUT_OF_SCOPE
             discount_code = None
             should_send_reply = True
+            state.setdefault("trace", []).append("decide: out_of_scope")
 
         elif not creator:
             # In scope but no creator identified
@@ -265,6 +343,7 @@ class AIDiscountAgent:
             status = ConversationStatus.PENDING_CREATOR_INFO
             discount_code = None
             should_send_reply = True
+            state.setdefault("trace", []).append("decide: ask_creator")
 
         else:
             # Creator detected - check if we can issue code
@@ -290,6 +369,7 @@ class AIDiscountAgent:
                 should_send_reply = True
 
                 logger.info(f"Issuing code {code} for creator {creator}")
+                state.setdefault("trace", []).append(f"decide: issue_code {code} for {creator}")
 
             else:
                 # Already issued code before - can't issue again
@@ -301,6 +381,7 @@ class AIDiscountAgent:
                 should_send_reply = True
 
                 logger.info(f"Code already issued for {creator}, denying reissuance")
+                state.setdefault("trace", []).append("decide: already_sent_no_resend")
 
         # Store enrichment data for Bonus B
         state["follower_count"] = state.get("follower_count")
@@ -353,6 +434,7 @@ class AIDiscountAgent:
             "follower_count": None,
             "is_potential_influencer": None
         }
+        initial_state["trace"] = []
 
         # Execute the graph
         final_state = self.graph.invoke(initial_state)
@@ -366,6 +448,7 @@ class AIDiscountAgent:
         status = final_state["conversation_status"]
         discount_code = final_state["discount_code"]
         is_potential = final_state.get("is_potential_influencer", None)
+        follower_count = final_state.get("follower_count", None)
 
         # Create AgentDecision
         decision = AgentDecision(
@@ -376,11 +459,71 @@ class AIDiscountAgent:
             detection_confidence=confidence,
             discount_code_sent=discount_code,
             conversation_status=status,
-            is_potential_influencer=is_potential
+            is_potential_influencer=is_potential,
+            follower_count=follower_count,
+            trace=final_state.get("trace", [])
         )
 
         logger.info(f"Agent decision: creator={creator}, status={status.value}, "
                    f"code={discount_code}, method={detection_method}")
+
+        return decision
+
+    async def process_message_async(self, incoming: IncomingMessage) -> AgentDecision:
+        """Async processing to support LLM fallback within FastAPI event loop"""
+        logger.info(f"Processing message (async) from {incoming.user_id} on {incoming.platform.value}: {incoming.text}")
+
+        initial_state = {
+            "platform": incoming.platform.value,
+            "user_id": incoming.user_id,
+            "raw_message": incoming.text,
+            "message_id": incoming.message_id,
+
+            "normalized_message": "",
+            "is_in_scope": None,
+            "creator": None,
+            "detection_method": None,
+            "detection_confidence": 0.0,
+            "discount_code": None,
+            "can_issue_code": False,
+
+            "reply": "",
+            "template_key": "",
+            "conversation_status": ConversationStatus.PENDING_CREATOR_INFO,
+            "should_send_reply": True,
+
+            "follower_count": None,
+            "is_potential_influencer": None,
+            "trace": []
+        }
+
+        final_state = await self.graph_async.ainvoke(initial_state)
+
+        creator = final_state["creator"]
+        detection_method = final_state["detection_method"]
+        confidence = final_state["detection_confidence"]
+        reply = final_state["reply"]
+        template_key = final_state["template_key"]
+        status = final_state["conversation_status"]
+        discount_code = final_state["discount_code"]
+        is_potential = final_state.get("is_potential_influencer", None)
+        follower_count = final_state.get("follower_count", None)
+
+        decision = AgentDecision(
+            reply_text=reply,
+            template_key=template_key,
+            identified_creator=creator,
+            detection_method=detection_method,
+            detection_confidence=confidence,
+            discount_code_sent=discount_code,
+            conversation_status=status,
+            is_potential_influencer=is_potential,
+            follower_count=follower_count,
+            trace=final_state.get("trace", [])
+        )
+
+        logger.info(f"Agent decision (async): creator={creator}, status={status.value}, "
+                    f"code={discount_code}, method={detection_method}")
 
         return decision
 
@@ -397,6 +540,10 @@ class AIDiscountAgent:
         # Use the model's validator to format the timestamp correctly
         now_utc = datetime.now(timezone.utc)
 
+        # Bonus B: reuse enrichment from decision if provided
+        follower_count: Optional[int] = decision.follower_count
+        is_potential: Optional[bool] = decision.is_potential_influencer
+
         return InteractionRow(
             user_id=incoming.user_id,
             platform=incoming.platform.value,
@@ -405,8 +552,8 @@ class AIDiscountAgent:
             identified_creator=decision.identified_creator,
             discount_code_sent=decision.discount_code_sent,
             conversation_status=decision.conversation_status.value,
-            follower_count=None,  # Will populate during graph execution
-            is_potential_influencer=None   # Will populate during graph execution
+            follower_count=follower_count,
+            is_potential_influencer=is_potential
         )
 
 
@@ -426,6 +573,10 @@ def run_agent_on_message(message: str, platform: str = "instagram", user_id: str
     """
     logger.info(f"Message received: normalized | user={user_id}, platform={platform}, raw=\"{message}\", norm=\"{message.lower().strip()}\"")
 
+    # If using default demo user, generate a unique ID to avoid cross-test collisions
+    if user_id == "demo_user":
+        user_id = f"demo_user_{uuid4().hex[:8]}"
+
     # Load configurations
     agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
 
@@ -442,8 +593,15 @@ def run_agent_on_message(message: str, platform: str = "instagram", user_id: str
     # Create interaction row
     row = agent.create_interaction_row(incoming, decision)
 
+    # Persist interaction for idempotency/analytics
+    try:
+        from scripts.store import get_store
+        get_store().store_interaction(row)
+    except Exception as e:
+        logger.warning(f"Failed to persist interaction: {e}")
+
     # Return result as required by assignment
     return {
         "reply": decision.reply_text,
-        "database_row": row.dict()
+        "database_row": row.model_dump()
     }

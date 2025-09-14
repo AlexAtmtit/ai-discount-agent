@@ -66,16 +66,40 @@ class CreatorMatcher:
         text_lower = text.lower()
 
         # Pre-gate 1: Check for explicit out-of-scope keywords
-        out_of_scope_count = sum(1 for kw in OUT_OF_SCOPE_KEYWORDS
-                                if kw.lower() in text_lower)
-        # If multiple out-of-scope keywords and no discount keywords, reject
-        discount_kw_count = sum(1 for kw in DISCOUNT_KEYWORDS
-                               if kw in text_lower)
-        if out_of_scope_count >= 1 and discount_kw_count == 0:
-            logger.info(f"Out-of-scope detected: '{text}' contains greeting but no discount keywords")
-            return False
+        out_of_scope_count = sum(1 for kw in OUT_OF_SCOPE_KEYWORDS if kw in text_lower)
+        # Count discount-intent keywords
+        discount_kw_count = sum(1 for kw in DISCOUNT_KEYWORDS if kw in text_lower)
 
-        # Pre-gate 2: If contains discount keywords or creator tokens, accept
+        # Broadened 'from mention' heuristic: accept "from <token>" where token looks like a handle
+        # e.g., "from @mkbhd", "from mkbhd", "from casey_neistat"
+        from_mention = False
+        m = re.search(r"\bfrom\s+(@?[a-z0-9_\.]{3,})\b", text_lower)
+        if m:
+            # If token is not a very common word, allow as in-scope and let detection decide later
+            from_mention = True
+
+        # Fuzzy-aware intent: treat as in-scope if text is close to any alias even without discount words
+        fuzzy_accept_threshold = self.thresholds.get('fuzzy_accept', 0.8)
+        best_alias_score = 0.0
+        for alias in self.alias_to_creator.keys():
+            score = fuzz.partial_ratio(text_lower, alias) / 100.0
+            if score > best_alias_score:
+                best_alias_score = score
+            if score >= fuzzy_accept_threshold:
+                break
+
+        # If greeting-like but has strong creator signal via 'from' or fuzzy alias, treat as in-scope
+        if out_of_scope_count >= 1 and discount_kw_count == 0:
+            if from_mention or best_alias_score >= fuzzy_accept_threshold:
+                logger.info(
+                    f"Intent override to in-scope: greeting present but creator signal detected "
+                    f"(from_mention={from_mention}, fuzzy_score={best_alias_score:.2f})"
+                )
+            else:
+                logger.info(f"Out-of-scope detected: '{text}' contains greeting but no discount/creator signal")
+                return False
+
+        # If contains discount keywords or known creator tokens, accept
         for keyword in DISCOUNT_KEYWORDS:
             if keyword in text_lower:
                 return True
@@ -83,6 +107,15 @@ class CreatorMatcher:
         for token in CREATOR_TOKENS:
             if token in text_lower:
                 return True
+
+        # If from mention heuristic hit, accept
+        if from_mention:
+            return True
+
+        # If strong fuzzy score to an alias, accept
+        if best_alias_score >= fuzzy_accept_threshold:
+            logger.info(f"Intent fuzzy accept: '{text}' ~ alias (score={best_alias_score:.2f})")
+            return True
 
         # Conservative default: mark out-of-scope for unknown messages
         logger.info(f"Unknown intent: '{text}' - defaulting to out-of-scope")
@@ -126,10 +159,11 @@ class CreatorMatcher:
         if not self.flags.get('enable_fuzzy_matching', True):
             return None
 
-        # Pre-gate: Only consider fuzzy if message contains creator-relevant tokens
+        # Pre-gate: allow fuzzy if contains creator tokens OR discount keywords
         text_lower = text.lower()
         has_creator_token = any(token in text_lower for token in CREATOR_TOKENS)
-        if not has_creator_token:
+        has_discount_kw = any(kw in text_lower for kw in DISCOUNT_KEYWORDS)
+        if not (has_creator_token or has_discount_kw):
             return None
 
         best_match = None
@@ -192,11 +226,12 @@ def normalize_text(text: str) -> str:
     # Convert to lowercase and strip whitespace
     normalized = text.lower().strip()
 
-    # Remove extra whitespace
-    normalized = re.sub(r'\s+', ' ', normalized)
+    # Remove common punctuation across the string, but keep '@' for mentions
+    # Replace punctuation with space to keep token boundaries
+    normalized = re.sub(r"[!?,.;:()\[\]\"'\-]", " ", normalized)
 
-    # Remove common punctuation that might interfere with matching
-    normalized = re.sub(r'[!?.,;:]+$', '', normalized)  # Trailing punctuation
+    # Collapse multiple spaces
+    normalized = re.sub(r'\s+', ' ', normalized)
 
     return normalized
 
