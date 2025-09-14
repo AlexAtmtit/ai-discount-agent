@@ -40,8 +40,8 @@ if api_key:
     gemini_config = GeminiConfig(
         api_key=api_key,
         max_attempts=2,
-        total_budget_ms=2000,
-        per_attempt_timeout_ms=2000,
+        total_budget_ms=8000,
+        per_attempt_timeout_ms=4000,
         model_version="gemini-2.5-flash-lite"
     )
     # Load campaign config to provide alias hints

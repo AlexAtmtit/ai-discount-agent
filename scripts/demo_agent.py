@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import REAL AI agent and models (not simulation)
 from scripts.agent_graph import AIDiscountAgent
-from scripts.models import IncomingMessage, InteractionRow, DetectionMethod, ConversationStatus
+from scripts.models import IncomingMessage, DetectionMethod, ConversationStatus
 from scripts.store import get_store
 from scripts.gemini_client import LLMResult
 from datetime import datetime, timezone
@@ -33,31 +33,43 @@ import asyncio
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Comprehensive test suite demonstrating all system capabilities
+# Comprehensive test suite demonstrating system capabilities
+# Each item: (message, description, opts)
 TEST_CASES = [
     # Exact Match Cases
-    ("mkbhd sent me", "MARQUES20", "Exact match - mkbhd"),
-    ("Hi, Casey sent me", "CASEY15OFF", "Exact match - casey alias"),
-    ("mkbhd discount code please", "MARQUES20", "Exact match - mkbhd with context"),
-    ("lily_singh sent me here", "LILY25", "Exact match - lily_singh"),
-    ("peter_mckinnon discount", "PETERSVLOG", "Exact match - peter_mckinnon"),
+    ("mkbhd sent me", "Exact match - mkbhd", {}),
+    ("Hi, Casey sent me", "Exact match - casey alias", {}),
+    ("mkbhd discount code please", "Exact match - mkbhd with context", {}),
+    ("lily_singh sent me here", "Exact match - lily_singh", {}),
+    ("peter_mckinnon discount", "Exact match - peter_mckinnon", {}),
 
-    # Fuzzy Match Cases
-    ("Marques Bronlee discount", "MARQUES20", "Fuzzy match - mkbhd misspelling"),
-    ("marqes brwnli promo", "MARQUES20", "Advanced fuzzy - mkbhd typos"),
-    ("caseyy discount?", "CASEY15OFF", "Minor spelling variation"),
+    # Fuzzy true positives (no alias tokens)
+    ("marqes brwnli promo", "Fuzzy match - mkbhd typos", {}),
+    ("casey nistt discount", "Fuzzy match - casey_neistat misspelling", {}),
 
-    # LLM Terminal Cases (ambiguous or incomplete)
-    ("discount", "Ask user", "LLM terminal - too ambiguous"),
-    ("promo code", "Ask user", "LLM terminal - missing creator"),
-    ("steve creator sent me", "Ask user", "LLM terminal - unknown creator"),
-    ("unknown creator here", "Ask user", "LLM terminal - completely unknown"),
+    # From-mention fuzzy-aware intent
+    ("from @mkbd", "From-mention (typo) - mkbhd", {}),
+    ("from lilly_sing", "From-mention (typo) - lily_singh", {}),
+
+    # LLM fallback (terminal none)
+    ("promo code", "LLM terminal - missing creator", {}),
+    ("unknown creator here", "LLM terminal - completely unknown", {}),
+
+    # LLM fallback (success demo) - disable fuzzy for this case if API key is set
+    ("marq brnli sent me a coupon", "LLM success demo (rules disabled)", {"llm_success": True}),
+
+    # Normalization showcase (noise tolerance)
+    ("mkbhd!!!", "Normalization - trailing punctuation", {}),
+    ("   MkBhD    SeNt   Me   ", "Normalization - whitespace/case", {}),
+    ("casey-neistat discount", "Normalization - hyphenation", {}),
+    ("Lily’s video discount", "Normalization - unicode apostrophe", {}),
+    ("I came from @mkbhd, need code", "Normalization - mention with punctuation", {}),
+    ("mkbhd 😃🔥 sent me", "Normalization - emoji noise", {}),
 
     # Out-of-scope Detection Cases
-    ("what's up", "Out of scope", "Intent filter - greeting"),
-    ("tech buddy made this", "Out of scope", "Intent filter - unrelated"),
-    ("hello", "Out of scope", "Intent filter - pure greeting"),
-    ("nice video", "Out of scope", "Intent filter - no discount mention")
+    ("what's up", "Intent filter - greeting", {}),
+    ("hello", "Intent filter - pure greeting", {}),
+    ("nice video", "Intent filter - no discount mention", {}),
 ]
 
 def main():
@@ -120,26 +132,22 @@ def main():
     total_tests = len(TEST_CASES)
 
     # Initialize REAL AI agent (not simulation)
-    try:
-        print("🚀 Initializing AI Discount Agent...")
-        agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
-        print("✅ Agent initialized successfully!\n")
-        # Print active config thresholds/flags
-        with open("config/campaign.yaml", "r") as f:
-            cfg = yaml.safe_load(f)
-        thresholds = cfg.get("thresholds", {})
-        flags = cfg.get("flags", {})
-        print("CONFIG:")
-        print(f"  fuzzy_accept: {thresholds.get('fuzzy_accept')}")
-        print(f"  enable_llm_fallback: {flags.get('enable_llm_fallback')}")
-        if mock_llm_note:
-            print(f"  {mock_llm_note}")
-        print()
-    except Exception as e:
-        print(f"❌ Failed to initialize agent: {e}")
-        return
+    print("🚀 Initializing AI Discount Agent...")
+    agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
+    print("✅ Agent initialized successfully!\n")
+    # Print active config thresholds/flags
+    with open("config/campaign.yaml", "r") as f:
+        cfg = yaml.safe_load(f)
+    thresholds = cfg.get("thresholds", {})
+    flags = cfg.get("flags", {})
+    print("CONFIG:")
+    print(f"  fuzzy_accept: {thresholds.get('fuzzy_accept')}")
+    print(f"  enable_llm_fallback: {flags.get('enable_llm_fallback')}")
+    if mock_llm_note:
+        print(f"  {mock_llm_note}")
+    print()
 
-    for i, (message, expected_code, description) in enumerate(TEST_CASES, 1):
+    for i, (message, description, opts) in enumerate(TEST_CASES, 1):
         print(f"🎯 TEST CASE {i}: {description}")
         print("INPUT:")
         print(f"  {message}")
@@ -147,17 +155,23 @@ def main():
 
         # Process message using REAL AI AGENT (not simulation)
         try:
-            # Create IncomingMessage for real agent
-            incoming = IncomingMessage(
-                platform="instagram",
-                user_id=f"demo_user_{i}",
-                text=message
-            )
+            # Determine if this case should force LLM path (disable fuzzy) — only if API key present
+            force_llm = bool(opts.get("llm_success")) and bool(os.getenv("GOOGLE_API_KEY"))
+
+            # Choose agent: base agent, or a temporary with fuzzy disabled
+            active_agent = agent
+            if force_llm:
+                active_agent = AIDiscountAgent("config/campaign.yaml", "config/templates.yaml")
+                active_agent.matcher.flags["enable_fuzzy_matching"] = False
+
+            incoming = IncomingMessage(platform="instagram", user_id=f"demo_user_{i}", text=message)
 
             print("🚀 Processing with AI Agent...")
 
-            # Use REAL agent processing
-            decision = agent.process_message(incoming)
+            # Use REAL agent processing and build row from pipeline
+            decision = active_agent.process_message(incoming)
+            row_model = active_agent.create_interaction_row(incoming, decision)
+            get_store().store_interaction(row_model)
 
             # Convert decision to result format
             result = {
@@ -165,7 +179,9 @@ def main():
                 "creator": decision.identified_creator,
                 "method": decision.detection_method.value.lower() if decision.detection_method else "unknown",
                 "status": decision.conversation_status.value,
-                "code": decision.discount_code_sent
+                "code": decision.discount_code_sent,
+                "trace": decision.trace or [],
+                "row": row_model.model_dump(),
             }
 
             print("✅ Processing completed!")
@@ -187,6 +203,7 @@ def main():
         # Show METHOD DETECTION DETAILS
         print("METHOD:")
         method = result.get('method', 'unknown')
+        status = result.get('status')
 
         if method == 'exact':
             print("   📏 EXACT MATCH: Creator found directly in rules database")
@@ -194,26 +211,13 @@ def main():
             print("   🌀 FUZZY MATCH: Creator found via similarity algorithm")
         elif method == 'llm':
             print("   🤖 LLM PROCESSING: Creator found via Gemini AI analysis")
-            print("     • Model: Gemini-2.5-Flash-Lite")
-            print("     • API Calls: 1/2 (budget protected)")
-            print("     • Timeout: 2.5s per attempt")
-            print("     • Confidence: 0.95+ (high)")
-        elif not result.get('creator') and expected_code == "Ask user":
-            print("   🤖 LLM TERMINAL: AI analyzed message but found no valid creator")
-            print("     • Status: TERMINAL response (non-retryable)")
-            print("     • Fallback: Asking user for creator clarification")
-        elif not result.get('creator') and expected_code == "Out of scope":
+        elif status == 'pending_creator_info':
+            print("   🤖 LLM/Rules ASK: No confident creator, asking user for clarification")
+        elif status == 'out_of_scope':
             print("   🚫 INTENT FILTER: Message identified as non-discount related")
-            print("     • Detection: No discount keywords found")
-            print("     • Status: Out-of-scope")
-        elif method == 'unknown' or method is None:
-            if result.get('creator'):
-                print("   📏 RULE MATCH: Creator found via business logic rules")
-            else:
-                print("   ❓ METHOD UNAVAILABLE: Creator detection results unclear")
-                print("     • Likely: LLM terminal or intent filter scenario")
+            print("     • Detection: No discount/creator signal")
         else:
-            print(f"   🔧 {method.upper()}: Detection method identified")
+            print("   ❓ METHOD UNAVAILABLE: Creator detection method not specified")
         print()
 
         print("REPLY:")
@@ -221,41 +225,13 @@ def main():
         print()
 
         print("ROW:")
-
-        # Create database row (Step 3 compliance) and persist
-        now = datetime.now(timezone.utc)
-        row = InteractionRow(
-            user_id="demo_user",
-            platform="instagram",
-            timestamp=now,
-            raw_incoming_message=message,
-            identified_creator=result['creator'],
-            discount_code_sent=result.get('code'),
-            conversation_status=result['status'],
-            follower_count=_get_demo_followers(result['creator']) if result['creator'] else None,
-            is_potential_influencer=_get_demo_influencer(result['creator']) if result['creator'] else None
-        )
-        # Persist
-        get_store().store_interaction(row)
-
-        # Show required fields (Step 3 compliance)
-        required_fields = [
+        row = result["row"]
+        for key in [
             'user_id', 'platform', 'timestamp', 'raw_incoming_message',
-            'identified_creator', 'discount_code_sent', 'conversation_status'
-        ]
-
-        for field in required_fields:
-            value = row.__dict__.get(field)
-            if field == 'timestamp':
-                value = now.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-            print(f"  {field}: {value}")
-
-        # Show Bonus B fields
-        if result['creator']:
-            follower_count = _get_demo_followers(result['creator'])
-            is_potential = _get_demo_influencer(result['creator'])
-            print(f"  follower_count: {follower_count}         (Bonus B: CRM enrichment)")
-            print(f"  is_potential_influencer: {is_potential}  (Bonus B: Influencer detection)")
+            'identified_creator', 'discount_code_sent', 'conversation_status',
+            'follower_count', 'is_potential_influencer'
+        ]:
+            print(f"  {key}: {row.get(key)}")
 
         # Trace in explain mode
         if 'trace' in result and result['trace']:
@@ -286,22 +262,7 @@ def main():
         print("  by creator:")
         for creator, stats in summary.creators.items():
             print(f"   - {creator}: requests={stats.total_requests}, completed={stats.total_completed}")
-
-
-def _get_demo_followers(creator):
-    """Demo CRM data simulation"""
-    followers = {
-        "mkbhd": 138254,  # Large influencer
-        "casey_neistat": 82461,  # Mid-size influencer
-        "lily_singh": 65432,  # Smaller influencer
-        "peter_mckinnon": 45678   # Micro-influencer
-    }
-    return followers.get(creator, 10000)
-
-def _get_demo_influencer(creator):
-    """Demo influencer threshold logic"""
-    followers = _get_demo_followers(creator)
-    return followers > 50000  # Basic threshold
+    # Enrichment printed from row above; no static demo mapping
 
 if __name__ == "__main__":
     main()
