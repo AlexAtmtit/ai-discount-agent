@@ -33,8 +33,8 @@ class GeminiConfig:
     """Configuration for Gemini API calls"""
     api_key: Optional[str]
     max_attempts: int = 2
-    total_budget_ms: int = 2000  # Stricter default budget (2s total)
-    per_attempt_timeout_ms: int = 2000  # Stricter per-attempt timeout (2s)
+    total_budget_ms: int = 8000  # Default total budget: 8s
+    per_attempt_timeout_ms: int = 4000  # Default per-attempt timeout: 4s
     model_version: str = "gemini-2.5-flash-lite"
 
 
@@ -387,8 +387,8 @@ def get_gemini_client() -> Optional[GeminiClient]:
 
     # Load configurable LLM settings from environment
     max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", "2"))
-    total_budget_ms = int(os.getenv("LLM_TOTAL_BUDGET_MS", "2000"))
-    per_attempt_timeout_ms = int(os.getenv("LLM_PER_ATTEMPT_TIMEOUT_MS", "2000"))
+    total_budget_ms = int(os.getenv("LLM_TOTAL_BUDGET_MS", "8000"))
+    per_attempt_timeout_ms = int(os.getenv("LLM_PER_ATTEMPT_TIMEOUT_MS", "4000"))
 
     # Load campaign configuration
     import yaml

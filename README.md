@@ -152,7 +152,7 @@ Production notes include unique constraints for webhook dedupe and issuance guar
 ## LLM Provider Configuration
 
 **Model**: Gemini 2.5 Flash Lite via google-generativeai
-**Execution**: Bounded with 2 attempts, 2s total budget, 2000ms per attempt
+**Execution**: Bounded with 2 attempts, 8s total budget (default), 4000ms per attempt
 **Validation**: Strict JSON mode with {"creator":"<allow-listed|none>"} response
 **Fallback**: If LLM fails after retries, system asks for creator clarification
 
@@ -222,11 +222,13 @@ Run the test suite:
 ```
 
 The suite covers:
-- **Detection logic**: exact/alias, fuzzy, intent classification
-- **Integration tests**: end-to-end /simulate flow
-- **Idempotency**: one-code-per-user guarantee
-- **Error handling**: LLM timeout/retry, malformed inputs
-- **Bonus features**: enrichment data, analytics aggregation
+- **Detection logic**: exact/alias, fuzzy acceptance, fuzzy-aware intent (“from <handle>”)
+- **Normalization**: punctuation/Unicode/emoji/whitespace/hyphenation — still detects the right creator
+- **Conversational flows**: ask → creator, out_of_scope → creator, resend blocked
+- **LLM fallback**: retry success (mocked), terminal none; bounded time budgets
+- **Integration**: /simulate end-to-end, analytics summary aggregation
+- **Idempotency**: one-code-per-user guarantee per (platform,user)
+- **Admin**: /admin/reset clears store; /admin/reload applies new aliases
 
 ## Campaign Configuration
 
@@ -304,9 +306,12 @@ Now type messages (no cURL needed). Commands:
 
 If `GOOGLE_API_KEY` is set before starting the server, ambiguous messages will use LLM fallback where rules can’t decide.
 
+Tip: The intent gate is fuzzy-aware and accepts “from <handle>” patterns (e.g., “from @mkbd”), so near-miss creator mentions proceed to detection (exact → fuzzy → LLM) even without explicit words like “discount” or “code”.
+
 ## Test Suite Summary (short)
 
 - `tests/test_agent_core.py`: core detection and response flows; out_of_scope, ask_creator, idempotency; platform handling; row shape and timestamp format.
 - `tests/test_conversation.py`: multi-turn conversations: ask → creator → issue; out_of_scope → creator; completed then resend blocked; fuzzy follow-up issuance.
 - `tests/test_fuzzy_and_llm.py`: fuzzy acceptance for misspellings; mocked LLM fallback tests (retry success, terminal none, budget exhausted) using async processing.
 - `tests/test_api_endpoints.py`: `/simulate` round-trip and `/analytics/creators` summary; `/admin/reset` clears state; `/admin/reload` applies a new alias and affects next requests.
+- `tests/test_normalization.py`: normalization robustness (trailing punctuation, whitespace/case, hyphenation, Unicode punctuation, mention punctuation, emoji noise) — all still resolve to the correct creator/code.

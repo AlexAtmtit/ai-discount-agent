@@ -226,7 +226,10 @@ def normalize_text(text: str) -> str:
     # Convert to lowercase and strip whitespace
     normalized = text.lower().strip()
 
-    # Remove common punctuation across the string, but keep '@' for mentions
+    # Normalize common Unicode punctuation to spaces (smart quotes, dashes)
+    normalized = re.sub(r"[\u2018\u2019\u201C\u201D\u2013\u2014]", " ", normalized)
+
+    # Remove common ASCII punctuation across the string, but keep '@' for mentions
     # Replace punctuation with space to keep token boundaries
     normalized = re.sub(r"[!?,.;:()\[\]\"'\-]", " ", normalized)
 
