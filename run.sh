@@ -13,6 +13,7 @@ fi
 # Activate virtual environment
 echo "Activating virtual environment..."
 source .venv/bin/activate
+export PYTHONPATH=.
 
 # Set environment variables (optional)
 export CAMPAIGN_CONFIG_PATH=./config/campaign.yaml
@@ -25,7 +26,7 @@ else
     echo "No GOOGLE_API_KEY set - LLM fallback disabled"
 fi
 
-# Start server
+# Start server (module mode so imports resolve)
 echo "Starting FastAPI server..."
 echo "API will be available at:"
 echo "  http://localhost:8000"
@@ -34,4 +35,4 @@ echo ""
 echo "Press Ctrl+C to stop the server"
 echo ""
 
-python3 api/app.py
+python3 -m uvicorn api.app:app --reload

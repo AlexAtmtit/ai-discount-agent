@@ -8,7 +8,8 @@ for production reliability.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
+from typing import List
 
 
 class Platform(Enum):
@@ -48,7 +49,7 @@ class IncomingMessage(BaseModel):
     thread_id: Optional[str] = Field(None, description="Platform-specific conversation thread ID")
     message_id: Optional[str] = Field(None, description="Platform-specific message ID")
 
-    @validator('text')
+    @field_validator('text', mode='before')
     def normalize_text(cls, v):
         """Normalize text to lowercase for consistent processing"""
         return v.lower().strip()
@@ -64,6 +65,8 @@ class AgentDecision(BaseModel):
     discount_code_sent: Optional[str] = Field(None, description="Code issued to user")
     conversation_status: ConversationStatus = Field(..., description="Final status of interaction")
     is_potential_influencer: Optional[bool] = Field(None, description="Engagement heuristic")
+    trace: Optional[List[str]] = Field(None, description="Explain-mode trace of agent steps")
+    follower_count: Optional[int] = Field(None, description="Simulated follower count")
 
 
 class InteractionRow(BaseModel):
@@ -80,7 +83,7 @@ class InteractionRow(BaseModel):
     follower_count: Optional[int] = None
     is_potential_influencer: Optional[bool] = None
 
-    @validator('timestamp', pre=True)
+    @field_validator('timestamp', mode='before')
     def ensure_utc_iso_format(cls, v):
         """Ensure timestamp is in ISO8601 UTC format"""
         if isinstance(v, datetime):

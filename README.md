@@ -57,18 +57,28 @@ git clone <your-repo-url>
 cd ai-discount-agent
 ./setup.sh              # Setup virtual environment and dependencies
 ./demo.sh               # Run the standalone agent demo
+
+# Optional advanced demo (explain + mock LLM + clean state)
+python scripts/demo_agent.py --explain --reset --mock-llm success
 ```
 
-### Sample Output
+### Sample Output (abbreviated)
 ```
-Input: I saw this on mkbhd's story, I need the discount
-Reply: Here's your discount code from mkbhd: MARQUES20 🎉
+INPUT:
+  mkbhd sent me
+METHOD:
+  📏 EXACT MATCH
+REPLY:
+  Here's your discount code from mkbhd: MARQUES20 🎉
+ROW:
+  {"user_id":"demo_user","platform":"instagram","timestamp":"2025-09-13T10:00:00.000Z", ...}
 
-Input: mkbhd discount code please
-Reply: Here's your discount code from mkbhd: MARQUES20 🎉
-
-Input: discount
-Reply: Thanks for your message! Which creator sent you? I have codes forCasey Neistat, Marques Brownlee, Lily Singh, or Peter McKinnon. 😊
+INPUT:
+  discount
+METHOD:
+  (no creator detected)
+REPLY:
+  Thanks for your message! Which creator sent you? 😊
 ```
 
 ## Approach Overview
@@ -77,7 +87,7 @@ We prioritize a hybrid detection strategy: exact alias matching first, then fuzz
 
 **Key decisions:**
 - **In-memory storage for demo** (files are for documentation)
-- **Bounded LLM** (2 attempts, 1s budget, only allow-listed responses)
+- **Bounded LLM** (2 attempts, 2s total budget by default, only allow-listed responses)
 - **Intent detection** prevents spam/abuse by asking out irrelevant messages
 - **One code per user per platform** prevents fraud
 
@@ -129,7 +139,7 @@ CREATE TABLE interactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL,
   platform TEXT NOT NULL,
-  ts TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
   raw_incoming_message TEXT NOT NULL,
   identified_creator TEXT NULL,
   discount_code_sent TEXT NULL,
@@ -142,7 +152,7 @@ Production notes include unique constraints for webhook dedupe and issuance guar
 ## LLM Provider Configuration
 
 **Model**: Gemini 2.5 Flash Lite via google-generativeai
-**Execution**: Bounded with 2 attempts, 1s total budget, 400ms per attempt
+**Execution**: Bounded with 2 attempts, 2s total budget, 2000ms per attempt
 **Validation**: Strict JSON mode with {"creator":"<allow-listed|none>"} response
 **Fallback**: If LLM fails after retries, system asks for creator clarification
 
@@ -186,7 +196,9 @@ Response:
 ```json
 {
   "reply": "Here's your discount code from mkbhd: MARQUES20 🎉",
-  "database_row": { ... }
+  "database_row": { ... },
+  "detection_method": "exact|fuzzy|llm|null",
+  "detection_confidence": 0.0
 }
 ```
 
@@ -195,6 +207,12 @@ Production webhook endpoint with fast-path optimization.
 
 ### `/analytics/creators` (GET)
 Summary statistics for campaign effectiveness.
+
+### `/admin/reload` (POST)
+Hot-reload campaign and template configs from YAML.
+
+### `/admin/reset` (POST)
+Demo-only endpoint to clear the in-memory store.
 
 ## Testing
 
@@ -256,7 +274,9 @@ replies:
 
 3. **Run demo**:
    ```bash
-   ./demo.sh
+   ./demo.sh             # quick demo
+   # or advanced options
+   python scripts/demo_agent.py --explain --reset --mock-llm success
    ```
 
 4. **Start server**:
@@ -264,4 +284,29 @@ replies:
    ./run.sh  # FastAPI server on localhost:8000
    ```
 
+### Interactive CLI Chat (optional)
 
+Start the server in one terminal:
+```bash
+./run.sh
+```
+
+Open another terminal for a chat session:
+```bash
+./chat.sh --server http://localhost:8000 --user cli_user --platform instagram --explain
+```
+
+Now type messages (no cURL needed). Commands:
+- `/help` — list commands
+- `/reset` — clear in-memory store on server
+- `/reload` — reload YAML configs
+- `/quit` — exit
+
+If `GOOGLE_API_KEY` is set before starting the server, ambiguous messages will use LLM fallback where rules can’t decide.
+
+## Test Suite Summary (short)
+
+- `tests/test_agent_core.py`: core detection and response flows; out_of_scope, ask_creator, idempotency; platform handling; row shape and timestamp format.
+- `tests/test_conversation.py`: multi-turn conversations: ask → creator → issue; out_of_scope → creator; completed then resend blocked; fuzzy follow-up issuance.
+- `tests/test_fuzzy_and_llm.py`: fuzzy acceptance for misspellings; mocked LLM fallback tests (retry success, terminal none, budget exhausted) using async processing.
+- `tests/test_api_endpoints.py`: `/simulate` round-trip and `/analytics/creators` summary; `/admin/reset` clears state; `/admin/reload` applies a new alias and affects next requests.

@@ -10,9 +10,10 @@ if [ ! -d ".venv" ]; then
     ./setup.sh
 fi
 
-# Activate virtual environment
+# Activate virtual environment and set PYTHONPATH
 echo "Activating virtual environment..."
 source .venv/bin/activate
+export PYTHONPATH=.
 
 # Run tests
 echo "Running tests..."

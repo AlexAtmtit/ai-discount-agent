@@ -2,18 +2,16 @@
 
 This module provides a bounded LLM client for creator detection fallback.
 It implements strict JSON parsing, retry logic with timeouts, and bounded execution.
+LLM usage is optional and lazily initialized when a valid GOOGLE_API_KEY is present.
 """
 
-# Configure Gemini in the same module that calls it
 import os
 from dotenv import load_dotenv
 
+# Load env variables, but do NOT assert or configure at import-time.
 load_dotenv()  # Safe even if .env isn't present
-API_KEY = os.environ.get("GOOGLE_API_KEY", "").strip().strip('"')
-assert API_KEY and API_KEY.startswith("AIza"), "GOOGLE_API_KEY missing or malformed"
-import google.generativeai as genai
-genai.configure(api_key=API_KEY)
-print(f"[gemini] using key: {API_KEY[:3]}…{API_KEY[-3:]} len={len(API_KEY)}")
+
+import google.generativeai as genai  # Imported, but configured only when key is available
 
 import asyncio
 import json
@@ -35,8 +33,8 @@ class GeminiConfig:
     """Configuration for Gemini API calls"""
     api_key: Optional[str]
     max_attempts: int = 2
-    total_budget_ms: int = 5000  # More generous total budget
-    per_attempt_timeout_ms: int = 2500  # Realistic timeout for LLM calls (2.5s)
+    total_budget_ms: int = 2000  # Stricter default budget (2s total)
+    per_attempt_timeout_ms: int = 2000  # Stricter per-attempt timeout (2s)
     model_version: str = "gemini-2.5-flash-lite"
 
 
@@ -72,6 +70,7 @@ class GeminiClient:
         self.alias_hints = self._build_alias_hints()
 
         if config.api_key:
+            # Configure SDK only when a valid key is provided
             genai.configure(api_key=config.api_key)
 
     def _build_alias_hints(self) -> Dict[str, List[str]]:
@@ -254,7 +253,11 @@ Message: "{message}"
         last_error = None
         received_none_response = False
 
-        logger.info(f"LLM fallback started | budget_ms=5000, per_attempt_timeout_ms=2500, max_attempts=2")
+        # Log configured budgets (not hard-coded)
+        logger.info(
+            f"LLM fallback configured | budget_ms={self.config.total_budget_ms}, "
+            f"per_attempt_timeout_ms={self.config.per_attempt_timeout_ms}, max_attempts={self.config.max_attempts}"
+        )
 
         while attempts < self.config.max_attempts:
             attempts += 1
@@ -384,7 +387,7 @@ def get_gemini_client() -> Optional[GeminiClient]:
 
     # Load configurable LLM settings from environment
     max_attempts = int(os.getenv("LLM_MAX_ATTEMPTS", "2"))
-    total_budget_ms = int(os.getenv("LLM_TOTAL_BUDGET_MS", "4000"))
+    total_budget_ms = int(os.getenv("LLM_TOTAL_BUDGET_MS", "2000"))
     per_attempt_timeout_ms = int(os.getenv("LLM_PER_ATTEMPT_TIMEOUT_MS", "2000"))
 
     # Load campaign configuration

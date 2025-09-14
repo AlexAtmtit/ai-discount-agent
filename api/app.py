@@ -9,10 +9,10 @@ from pydantic import BaseModel
 import logging
 import os
 import yaml
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from scripts.agent_graph import AIDiscountAgent
-from scripts.models import Platform
+from scripts.models import Platform, IncomingMessage
 from scripts.store import get_store
 from scripts.gemini_client import init_gemini, GeminiConfig
 
@@ -40,11 +40,17 @@ if api_key:
     gemini_config = GeminiConfig(
         api_key=api_key,
         max_attempts=2,
-        total_budget_ms=1000,
-        per_attempt_timeout_ms=400,
+        total_budget_ms=2000,
+        per_attempt_timeout_ms=2000,
         model_version="gemini-2.5-flash-lite"
     )
-    init_gemini(gemini_config)
+    # Load campaign config to provide alias hints
+    try:
+        with open(CAMPAIGN_CONFIG, 'r') as f:
+            _campaign_cfg = yaml.safe_load(f)
+    except Exception:
+        _campaign_cfg = {}
+    init_gemini(gemini_config, _campaign_cfg)
     logger.info("Gemini client initialized with API key")
 
 # Request/Response models
@@ -60,6 +66,9 @@ class SimulateResponse(BaseModel):
     """Response for /simulate endpoint"""
     reply: str
     database_row: Dict[str, Any]
+    detection_method: Optional[str] = None
+    detection_confidence: Optional[float] = None
+    trace: Optional[List[str]] = None
 
 class WebhookRequest(BaseModel):
     """Webhook request from platform"""
@@ -125,28 +134,25 @@ async def simulate_message(request: SimulateRequest):
             "thread_id": request.thread_id
         }
 
-        # Note: For simplicity, we're using the demo function directly
-        # In production, this would use the full agent pipeline
-        from scripts.agent_graph import run_agent_on_message
-
-        # Map to expected format
-        result = run_agent_on_message(
-            request.message,
+        # Use the full agent pipeline for a richer response
+        incoming = IncomingMessage(
             platform=request.platform,
-            user_id=request.user_id
+            user_id=request.user_id,
+            text=request.message,
+            message_id=request.message_id,
+            thread_id=request.thread_id,
         )
-
-        # For Bonus B enrichment demo, set fake enrichment data if creator is detected
-        if result["database_row"].get("identified_creator"):
-            creator = result["database_row"]["identified_creator"]
-            # Generate deterministic enrichment for demo
-            creator_hash = hash(creator) % 100000
-            result["database_row"]["follower_count"] = 10000 + (creator_hash % 900000)
-            result["database_row"]["is_potential_influencer"] = (creator_hash % 10) > 7
+        decision = await agent.process_message_async(incoming)
+        row = agent.create_interaction_row(incoming, decision)
+        # Persist
+        get_store().store_interaction(row)
 
         return SimulateResponse(
-            reply=result["reply"],
-            database_row=result["database_row"]
+            reply=decision.reply_text,
+            database_row=row.model_dump(),
+            detection_method=(decision.detection_method.value if decision.detection_method else None),
+            detection_confidence=decision.detection_confidence,
+            trace=decision.trace,
         )
 
     except Exception as e:
@@ -163,37 +169,19 @@ async def get_analytics():
     """
     try:
         store = get_store()
-
-        # Get interactions and aggregate manually
-        interactions = store.get_all_interactions() if hasattr(store, 'get_all_interactions') else []
-
-        # Aggregate stats
-        creators = {}
-        total_requests = 0
-        total_completed = 0
-
-        for row in interactions:
-            creator = row.get('identified_creator')
-            if not creator:
-                continue
-
-            total_requests += 1
-            conversation_status = row.get('conversation_status')
-
-            if creator not in creators:
-                creators[creator] = {'requests': 0, 'codes_sent': 0}
-
-            creators[creator]['requests'] += 1
-
-            if conversation_status == 'completed':
-                total_completed += 1
-                creators[creator]['codes_sent'] += 1
+        summary = store.get_analytics()
+        creators_simple: Dict[str, Dict[str, Any]] = {}
+        for creator, stats in summary.creators.items():
+            creators_simple[creator] = {
+                'requests': stats.total_requests,
+                'codes_sent': stats.total_completed,
+            }
 
         return AnalyticsResponse(
-            total_creators=len(creators),
-            total_requests=total_requests,
-            total_completed=total_completed,
-            creators=creators
+            total_creators=summary.total_creators,
+            total_requests=summary.total_requests,
+            total_completed=summary.total_completed,
+            creators=creators_simple,
         )
 
     except Exception as e:
@@ -249,6 +237,17 @@ async def reload_config():
     except Exception as e:
         logger.error(f"Config reload error: {e}")
         raise HTTPException(status_code=500, detail=f"Reload failed: {str(e)}")
+
+
+@app.post("/admin/reset")
+async def reset_store():
+    """Clear the in-memory store (demo-only)."""
+    try:
+        get_store().clear_data()
+        return {"status": "ok", "message": "Store cleared"}
+    except Exception as e:
+        logger.error(f"Reset error: {e}")
+        raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
 
 
 if __name__ == "__main__":
