@@ -220,11 +220,6 @@ def main():
             print(f"   follower_count: {follower_count}         (Bonus B: CRM enrichment)")
             print(f"   is_potential_influencer: {is_potential}  (Bonus B: Influencer detection)")
 
-        print()
-        print("✅ EXPECTED CODE:", expected_code)
-        actual_code = result.get('code', 'Ask user')
-        print("🔗 ACTUAL CODE:", actual_code)
-        print("✅ STATUS MATCH:", "✓" if (actual_code == expected_code) else "✗")
         print("\n" + "=" * 60 + "\n")
 
 
