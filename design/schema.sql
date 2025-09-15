@@ -4,14 +4,15 @@
 CREATE TABLE IF NOT EXISTS interactions (
   id BIGSERIAL PRIMARY KEY,
   user_id TEXT NOT NULL,
-  platform TEXT NOT NULL CHECK (platform IN ('instagram', 'tiktok', 'whatsapp')),
-  timestamp TIMESTAMPTZ NOT NULL,  -- stored as UTC
+  platform TEXT NOT NULL CHECK (platform IN ('instagram','tiktok','whatsapp')),
+  timestamp TIMESTAMPTZ NOT NULL,                -- initial request time (UTC)
   raw_incoming_message TEXT NOT NULL,
-  identified_creator TEXT NULL,
-  discount_code_sent TEXT NULL,
-  conversation_status TEXT NOT NULL CHECK (
+  identified_creator TEXT NULL,                   -- NULL when unknown/ask
+  discount_code_sent TEXT NULL,                   -- NULL when unknown/ask
+  conversation_status TEXT NOT NULL CHECK (       -- core statuses per brief + 'out_of_scope'
     conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
   ),
+  -- Bonus B (Lead Enrichment):
   follower_count INTEGER NULL,
   is_potential_influencer BOOLEAN NULL
 );
