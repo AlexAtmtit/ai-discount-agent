@@ -212,7 +212,24 @@ Response:
 Prototype webhook endpoint that processes messages inline. For production, the diagrams show a planned fast‑path/worker split.
 
 ### `/analytics/creators` (GET)
-Summary statistics for campaign effectiveness.
+Summary statistics for campaign effectiveness (by creator, across all platforms). Response shape:
+```json
+{
+  "total_creators": 3,
+  "total_requests": 10,
+  "total_completed": 6,
+  "creators": {
+    "mkbhd": {
+      "requests": 5,
+      "codes_sent": 4,
+      "platform_breakdown": {
+        "instagram": { "requests": 4, "codes_sent": 3 },
+        "tiktok":    { "requests": 1, "codes_sent": 1 }
+      }
+    }
+  }
+}
+```
 
 ### `/admin/reload` (POST)
 Hot-reload campaign and template configs from YAML.
