@@ -1,7 +1,7 @@
 replies:
   ask_creator: "Thanks for your message! Which creator sent you? 😊"
   
-  issue_code: "Here's your discount code from {creator_handle}: {discount_code} 🎉"
+  issue_code: "Here's your discount code from {creator_handle}: {discount_code}"
   
   already_sent_resend: "You already received this code! Here's your code from {creator_handle}: {discount_code}"
   

@@ -166,7 +166,7 @@ INPUT:
 METHOD:
   🌀 FUZZY MATCH
 REPLY:
-  Here's your discount code from mkbhd: MARQUES20 🎉
+  Here's your discount code from mkbhd: MARQUES20
 ROW:
   user_id: demo_user_3
   platform: instagram
@@ -342,7 +342,7 @@ End-to-end message processing for testing:
 Response:
 ```json
 {
-  "reply": "Here's your discount code from mkbhd: MARQUES20 🎉",
+  "reply": "Here's your discount code from mkbhd: MARQUES20",
   "database_row": { ... },
   "detection_method": "exact|fuzzy|llm|null",
   "detection_confidence": 0.0
@@ -418,7 +418,7 @@ Reply templates in `config/templates.yaml`:
 
 ```yaml
 replies:
-  issue_code: "Here's your discount code from {creator_handle}: {discount_code} 🎉"
+  issue_code: "Here's your discount code from {creator_handle}: {discount_code}"
   ask_creator: "Which creator sent you? I have codes from Casey Neistat, Marques Brownlee, Lily Singh, Peter McKinnon."
   ambiguous: "Could you clarify which creator sent you? {creator_handle} or {other_creator}?"
 ```
