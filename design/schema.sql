@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS interactions (
   discount_code_sent TEXT NULL,
   conversation_status TEXT NOT NULL CHECK (
     conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
-  )
+  ),
+  follower_count INTEGER NULL,
+  is_potential_influencer BOOLEAN NULL
 );
 
 -- Recommended production indexes and constraints:

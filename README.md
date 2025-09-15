@@ -129,7 +129,9 @@ CREATE TABLE IF NOT EXISTS interactions (
   discount_code_sent TEXT NULL,
   conversation_status TEXT NOT NULL CHECK (
     conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
-  )
+  ),
+  follower_count INTEGER NULL,
+  is_potential_influencer BOOLEAN NULL
 );
 ```
 
@@ -173,13 +175,7 @@ Example payloads and behavior are documented in `design/multi-platform.md`. In p
 - Idempotency by `(platform, message_id)`
 
 ### B) Enrichment & Lead Scoring
-Agent enrichment generates deterministic follower counts and potential influencer flags when creator is identified:
-```json
-{
-  "follower_count": 15000000,
-  "is_potential_influencer": true
-}
-```
+We simulate lead enrichment for the user_id after the creator is identified. The agent deterministically computes `follower_count` and `is_potential_influencer` from `user_id` (hash‑based), and includes them in the `database_row`. The production schema includes these columns.
 
 ### C) Analytics Endpoint
 ```
@@ -330,6 +326,22 @@ Now type messages (no cURL needed). Commands:
 If `GOOGLE_API_KEY` is set before starting the server, ambiguous messages will use LLM fallback where rules can’t decide.
 
 Tip: The intent gate is fuzzy-aware and accepts “from <handle>” patterns (e.g., “from @mkbd”), so near-miss creator mentions proceed to detection (exact → fuzzy → LLM) even without explicit words like “discount” or “code”.
+
+## Normalization & Enrichment
+
+- Normalization (noise-tolerant):
+  - Lowercases; collapses whitespace; replaces common ASCII punctuation with spaces and normalizes smart quotes/dashes; preserves “@” mentions; emoji‑tolerant.
+  - Examples:
+    - "casey-neistat discount" → "casey neistat discount" (matches alias)
+    - "Lily’s video discount" → "lily s video discount" (Unicode apostrophe normalized; matches alias "lily")
+    - "I came from @mkbhd, need code" → in‑scope via mention; proceeds to detection
+    - "mkbhd 😃🔥 sent me" → emojis preserved; exact "mkbhd" still matches
+
+- Lead Enrichment (Bonus B):
+  - After the creator is identified, we simulate enrichment for the user_id (hash‑based):
+    - follower_count (int)
+    - is_potential_influencer (bool)
+  - These fields are included in the `database_row` and defined in the Postgres schema.
 
 ## Test Suite Summary (short)
 
