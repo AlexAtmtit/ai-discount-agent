@@ -6,6 +6,7 @@ Run this after setting up your GOOGLE_API_KEY
 
 import os
 import sys
+import pytest
 sys.path.append('.')
 
 from scripts.agent_graph import run_agent_on_message
@@ -45,25 +46,25 @@ def test_fuzzy_matching_without_llm():
         except Exception as e:
             print(f"   ❌ Error: {e}")
 
-def test_with_llm_api(message: str):
+@pytest.mark.optional
+def test_with_llm_api():
     """Test a specific message with LLM fallback"""
+    message = "I need a discount code"
     print(f"\n🧠 Testing LLM Fallback: '{message}'")
     print("=" * 50)
 
     # Check if API key is available
     api_key = os.getenv('GOOGLE_API_KEY')
     if not api_key:
-        print("❌ No GOOGLE_API_KEY found. Set your API key first:")
-        print("   export GOOGLE_API_KEY=your_actual_api_key_here")
-        return
+        pytest.skip("GOOGLE_API_KEY not set; skipping live LLM test")
 
     # Initialize Gemini client
     try:
         config = GeminiConfig(
             api_key=api_key,
             max_attempts=2,
-            total_budget_ms=1000,
-            per_attempt_timeout_ms=400,
+            total_budget_ms=8000,
+            per_attempt_timeout_ms=4000,
             model_version="gemini-2.5-flash-lite"
         )
         init_gemini(config)
