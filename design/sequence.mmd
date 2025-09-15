@@ -2,59 +2,28 @@ sequenceDiagram
     participant User
     participant Webhook
     participant Normalizer
-    participant FastPath
-    participant Worker
-    participant IntentDetector
-    participant CreatorDetector
-    participant GeminiFallback
-    participant EnrichEngine
+    participant Intent
+    participant Detector
+    participant LLM
+    participant Enrich
     participant Store
     participant Sender
     participant Platform
 
-    Note over User, Platform: Happy Path: "mkbhd sent me"
+    Note over User, Platform: Happy Path (inline)
     User->>Webhook: DM text + metadata
     Webhook->>Normalizer: Normalize to internal format
-    Normalizer-->>Webhook: {platform, user_id, message}
+    Normalizer-->>Intent: {platform, user_id, message}
+    Intent-->>Detector: intent=in_scope
+    Detector-->>Sender: exact hit → issue code
+    Sender->>Enrich: enrichment lookup
+    Enrich->>Store: persist row
+    Sender->>Platform: send reply
+    Platform-->>User: "Here's your discount code …"
 
-    Webhook->>FastPath: Check exact alias & issuance rules
-    FastPath-->>Webhook: exact_hit=true
-    Webhook->>Sender: Send reply via platform API
-    Sender->>Platform: API call to send message
-    Platform-->>User: "Here's your discount code from mkbhd: MARQUES20 🎉"
-
-    Note over Worker, Platform: Fallback Path: No exact alias
-    User->>Webhook: Ambiguous message
-    Webhook->>FastPath: Check rules
-    FastPath-->>Webhook: exact_hit=false
-    Webhook->>Worker: Enqueue for background processing
-    Worker->>IntentDetector: Detect if message is about discounts
-    IntentDetector-->>Worker: intent=in_scope
-    Worker->>CreatorDetector: Exact alias match
-    CreatorDetector-->>Worker: result=none
-    Worker->>CreatorDetector: Fuzzy match
-    CreatorDetector-->>Worker: result=mkbhd (confidence=0.9)
-    Worker->>EnrichEngine: Get enrichment data
-    EnrichEngine-->>Worker: {follower_count: 15000000, is_potential: true}
-    Worker->>Sender: Send reply with code
-    Sender->>Store: Log interaction row
-    Store-->>Sender: stored
-    Sender->>Platform: Send message
-    Platform-->>User: Formatted reply
-
-    Note over Worker, Platform: LLM Fallback
-    User->>Webhook: Very ambiguous message
-    Webhook->>Worker: Processing
-    Worker->>CreatorDetector: Exact & fuzzy → none
-    Worker->>GeminiFallback: {"creator":"<one-of|none>"}
-    GeminiFallback-->>Worker: {"creator":"mkbhd"}
-    Worker->>EnrichEngine: Continue with confidence
-    EnrichEngine-->>Worker: Proceed to send reply
-
-    Note over Worker, Platform: Error/timeout handling
-    User->>Webhook: Message
-    Webhook->>Worker: Processing
-    Worker->>GeminiFallback: Call with 1s budget, 2 attempts
-    GeminiFallback-->>Worker: timeout after retries
-    Worker->>Sender: Send ask creator message
+    Note over Intent, LLM: Fallback path
+    Intent-->>Detector: in_scope
+    Detector-->>LLM: exact & fuzzy → none
+    LLM-->>Detector: {"creator":"mkbhd"|"none"}
+    Detector-->>Sender: decide (issue/ask)
     Sender->>Platform: "Which creator sent you?"
