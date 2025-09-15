@@ -173,9 +173,18 @@ async def get_analytics():
         summary = store.get_analytics()
         creators_simple: Dict[str, Dict[str, Any]] = {}
         for creator, stats in summary.creators.items():
+            # Transform platform breakdown to include codes_sent naming
+            platform_breakdown: Dict[str, Dict[str, int]] = {}
+            for plat, pb in stats.platform_breakdown.items():
+                platform_breakdown[plat] = {
+                    'requests': pb.get('requests', 0),
+                    'codes_sent': pb.get('completed', 0),
+                }
+
             creators_simple[creator] = {
                 'requests': stats.total_requests,
                 'codes_sent': stats.total_completed,
+                'platform_breakdown': platform_breakdown,
             }
 
         return AnalyticsResponse(

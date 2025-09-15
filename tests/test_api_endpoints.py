@@ -31,6 +31,12 @@ def test_analytics_counts():
     assert data["total_completed"] >= 2
     assert data["creators"]["mkbhd"]["codes_sent"] >= 1
     assert data["creators"]["casey_neistat"]["codes_sent"] >= 1
+    # Per-platform breakdown now included; instagram should be present for these
+    mkbhd_pb = data["creators"]["mkbhd"].get("platform_breakdown", {})
+    assert "instagram" in mkbhd_pb
+    assert mkbhd_pb["instagram"]["requests"] >= 1
+    # codes_sent is aliased from completed
+    assert mkbhd_pb["instagram"]["codes_sent"] >= 1
 
 
 def test_admin_reload_updates_alias(tmp_path):
