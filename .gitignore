@@ -46,3 +46,11 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtual environments and local artifacts
+.venv/
+python3.12/
+\#/
+or/
+.pytest_cache/
+pycache/
