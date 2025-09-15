@@ -73,7 +73,7 @@ class AIDiscountAgent:
             workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node_async))
         else:
             workflow.add_node("detect_creator", RunnableLambda(self._detect_creator_node))
-        workflow.add_node("enrich_creator", RunnableLambda(self._enrich_creator_node))
+        workflow.add_node("enrich_lead", RunnableLambda(self._enrich_lead_node))
         workflow.add_node("decide_response", RunnableLambda(self._decide_response_node))
 
         # Define flow
@@ -91,8 +91,8 @@ class AIDiscountAgent:
         )
 
         # Creator detection always goes to enrichment (or skip if no creator)
-        workflow.add_edge("detect_creator", "enrich_creator")
-        workflow.add_edge("enrich_creator", "decide_response")
+        workflow.add_edge("detect_creator", "enrich_lead")
+        workflow.add_edge("enrich_lead", "decide_response")
 
         # End at decision
         workflow.add_edge("decide_response", END)
@@ -283,8 +283,8 @@ class AIDiscountAgent:
 
         return state
 
-    def _enrich_creator_node(self, state: AgentState) -> AgentState:
-        """Generate enrichment data for the creator (Bonus B)
+    def _enrich_lead_node(self, state: AgentState) -> AgentState:
+        """Generate enrichment data for the lead/user (Bonus B)
 
         Args:
             state: Current agent state
@@ -293,24 +293,26 @@ class AIDiscountAgent:
             Updated state with enrichment data
         """
         creator = state["creator"]
-
         if not creator:
             return state
 
-        # Generate deterministic enrichment based on creator handle
-        # This simulates CRM data lookup
+        # Generate deterministic enrichment based on user_id (lead enrichment)
+        user_id = state.get("user_id") or "unknown_user"
+        uid_hash = hash(user_id) % 100000
 
-        # Hash creator name to generate pseudo-random but deterministic data
-        creator_hash = hash(creator) % 100000
+        follower_count = 10000 + (uid_hash % 900000)  # 10k to 910k followers
+        is_potential_influencer = follower_count > 50000 or (uid_hash % 10) > 7
 
-        follower_count = 10000 + (creator_hash % 900000)  # 10k to 910k followers
-        is_potential_influencer = follower_count > 50000 or (creator_hash % 10) > 7
-
-        logger.info(f"Enrichment for {creator}: {follower_count} followers, "
-                   f"potential_influencer={is_potential_influencer}")
+        logger.info(
+            f"Enrichment for user_id={user_id}: {follower_count} followers, "
+            f"potential_influencer={is_potential_influencer}"
+        )
 
         state["follower_count"] = follower_count
         state["is_potential_influencer"] = is_potential_influencer
+        state.setdefault("trace", []).append(
+            f"enrich: user_id={user_id} followers={follower_count} potential={is_potential_influencer}"
+        )
 
         return state
 

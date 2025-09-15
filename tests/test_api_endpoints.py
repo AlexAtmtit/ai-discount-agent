@@ -38,6 +38,13 @@ def test_analytics_counts():
     # codes_sent is aliased from completed
     assert mkbhd_pb["instagram"]["codes_sent"] >= 1
 
+    # Check enrichment present on a completed issuance via /simulate
+    res2 = client.post("/simulate", json={"platform": "instagram", "user_id": "enrich_user_1", "message": "casey sent me"})
+    row2 = res2.json()["database_row"]
+    assert row2["conversation_status"] == "completed"
+    assert isinstance(row2.get("follower_count"), int)
+    assert isinstance(row2.get("is_potential_influencer"), bool)
+
 
 def test_admin_reload_updates_alias(tmp_path):
     client = TestClient(app)
