@@ -4,7 +4,7 @@ Production-ready web API with endpoints for simulation, webhooks, and analytics.
 Implements async processing and proper error handling.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 import logging
 import os
@@ -15,6 +15,7 @@ from scripts.agent_graph import AIDiscountAgent
 from scripts.models import Platform, IncomingMessage
 from scripts.store import get_store
 from scripts.gemini_client import init_gemini, GeminiConfig
+from scripts import platform_normalizer as pn
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -190,7 +191,7 @@ async def get_analytics():
 
 
 @app.post("/webhook/{platform}")
-async def webhook_handler(platform: str, request: WebhookRequest):
+async def webhook_handler(platform: str, request: Request):
     """Handle webhook messages from platforms (placeholder)
 
     In production, this would:
@@ -202,17 +203,46 @@ async def webhook_handler(platform: str, request: WebhookRequest):
     For demo, returns immediate acknowledgment.
     """
     try:
-        logger.info(f"Webhook received from {platform}: {request.message}")
+        body = await request.body()
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        payload = await request.json()
 
-        # In production: validate signature, normalize payload, check fast-path conditions
-        # For demo: just acknowledge
+        logger.info(f"Webhook received from {platform} | headers={list(headers.keys())}")
+
+        platform = platform.lower()
+        # Verify signature when applicable
+        if platform == "instagram" and not pn.verify_instagram_signature(headers, body):
+            raise HTTPException(status_code=401, detail="Invalid signature (Instagram)")
+        if platform == "whatsapp" and not pn.verify_whatsapp_signature(headers, body):
+            raise HTTPException(status_code=401, detail="Invalid signature (WhatsApp)")
+        if platform == "tiktok" and not pn.verify_tiktok_signature(headers, body):
+            raise HTTPException(status_code=401, detail="Invalid signature (TikTok)")
+
+        # Normalize
+        if platform == "instagram":
+            incoming = pn.normalize_instagram(payload)
+        elif platform == "tiktok":
+            incoming = pn.normalize_tiktok(payload)
+        elif platform == "whatsapp":
+            incoming = pn.normalize_whatsapp(payload)
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported platform")
+
+        # Process with agent (async) and persist
+        decision = await agent.process_message_async(incoming)
+        row = agent.create_interaction_row(incoming, decision)
+        get_store().store_interaction(row)
 
         return {
             "status": "received",
-            "ack_id": f"ack_{request.message_id or 'demo'}",
-            "note": "Full webhook processing would be implemented in production"
+            "reply": decision.reply_text,
+            "database_row": row.model_dump(),
+            "detection_method": (decision.detection_method.value if decision.detection_method else None),
+            "detection_confidence": decision.detection_confidence,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         raise HTTPException(status_code=500, detail=f"Webhook failed: {str(e)}")

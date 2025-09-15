@@ -186,7 +186,7 @@
 - **Logging**: Structured logs with proper levels
 
 ### Performance Characteristics ✅ **Level: OPTIMIZED**
-- **Fast Path**: <10ms for exact matches (rule-based)
+-- Planned Fast Path (prod): <10ms for exact matches; prototype processes inline
 - **Medium Path**: 20-50ms for fuzzy matching
 - **Slow Path**: 300-1000ms for LLM fallback (bounded)
 - **Memory**: O(1) per request, horizontal scaling ready

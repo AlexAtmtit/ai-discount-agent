@@ -53,9 +53,9 @@ def detect_creator(self, message: str) -> Optional[Tuple[str, DetectionMethod]]:
 ### Resource Control Pattern
 **LLM Guardrails:**
 - Maximum 2 attempts per message
-- 1-second total execution budget
-- 400ms timeout per attempt
-- Exponential backoff between retries
+- 8-second total execution budget (default; env override)
+- 4000ms timeout per attempt
+- Small jitter/backoff between retries
 
 ```python
 @dataclass
@@ -66,8 +66,8 @@ class GeminiConfig:
 ```
 
 **Failure Modes:**
-- **Timeout**: <400ms per attempt → Fall back to user clarification
-- **Budget Exceeded**: >1000ms total → Fall back to user clarification
+- **Timeout**: <4000ms per attempt → Fall back to user clarification
+- **Budget Exceeded**: >8000ms total → Fall back to user clarification
 - **API Errors**: Network/Rate limit issues → Retry with backoff
 - **Parse Errors**: Invalid LLM response → Fall back to user clarification
 

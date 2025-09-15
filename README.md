@@ -21,22 +21,6 @@ sequenceDiagram
   Agent->>DB: write interaction row
 ```
 
-```mermaid
-sequenceDiagram
-  participant User
-  participant Webhook
-  participant Agent
-  participant Platform
-  participant DB
-
-  User->>Webhook: DM text
-  Webhook->>Agent: normalized message
-  Agent->>Agent: detect creator or ask
-  Agent->>Platform: reply text
-  Platform-->>User: message delivered
-  Agent->>DB: write interaction row
-```
-
 flowchart TD
   P[DM from IG or TT or WA]
   W[Webhook receive]
@@ -132,22 +116,24 @@ Each tool is chosen for its production maturity and operational reliability.
 
 ## Database Schema
 
-The provided `design/schema.sql` meets the assignment requirements:
+The provided `design/schema.sql` meets the assignment requirements with a Postgres design. The app uses an in‑memory store for the demo, but the production table is:
 
 ```sql
-CREATE TABLE interactions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS interactions (
+  id BIGSERIAL PRIMARY KEY,
   user_id TEXT NOT NULL,
-  platform TEXT NOT NULL,
-  timestamp TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK (platform IN ('instagram','tiktok','whatsapp')),
+  timestamp TIMESTAMPTZ NOT NULL,
   raw_incoming_message TEXT NOT NULL,
   identified_creator TEXT NULL,
   discount_code_sent TEXT NULL,
-  conversation_status TEXT NOT NULL
+  conversation_status TEXT NOT NULL CHECK (
+    conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
+  )
 );
 ```
 
-Production notes include unique constraints for webhook dedupe and issuance guards.
+Recommended indexes are included in comments (webhook idempotency and issuance guard). The agent returns a `database_row` JSON that maps 1:1 to this schema.
 
 ## LLM Provider Configuration
 
@@ -164,7 +150,27 @@ export GOOGLE_API_KEY=your_google_api_key_here
 ## Bonus Features
 
 ### A) Multi-Platform Considerations
-See `design/multi-platform.md` for webhook signature validation, reply windows (24h), and platform-specific restrictions (e.g., WhatsApp templates). The normalizer handles all platforms uniformly.
+See `design/multi-platform.md` for details on platform APIs, webhook signatures, reply windows (e.g., WhatsApp 24h), and business requirements. This repo includes working normalizers and signature stubs:
+
+- Code: `scripts/platform_normalizer.py`
+  - `normalize_instagram`, `normalize_tiktok`, `normalize_whatsapp` → map raw payloads to `IncomingMessage`
+  - HMAC-SHA256 verification stubs for Instagram/WhatsApp (`X-Hub-Signature-256`) and TikTok (`X-TikTok-Signature`)
+- API: `/webhook/{platform}`
+  - Verifies signature when `IG_APP_SECRET`/`WHATSAPP_APP_SECRET`/`TIKTOK_APP_SECRET` is set
+  - Normalizes payload, runs the agent asynchronously, persists a row, and returns `{reply, database_row, detection_method, detection_confidence}`
+- Tests: `tests/test_platform_normalizer.py` exercise normalization across all three platforms
+
+Example env:
+```bash
+export IG_APP_SECRET=...         # enables Instagram signature check
+export WHATSAPP_APP_SECRET=...   # enables WhatsApp signature check
+export TIKTOK_APP_SECRET=...     # enables TikTok signature check
+```
+
+Example payloads and behavior are documented in `design/multi-platform.md`. In production, add:
+- Rate-limit backoff by platform
+- 24h session window enforcement for WhatsApp template messages
+- Idempotency by `(platform, message_id)`
 
 ### B) Enrichment & Lead Scoring
 Agent enrichment generates deterministic follower counts and potential influencer flags when creator is identified:
@@ -203,7 +209,7 @@ Response:
 ```
 
 ### `/webhook/{platform}` (POST)
-Production webhook endpoint with fast-path optimization.
+Prototype webhook endpoint that processes messages inline. For production, the diagrams show a planned fast‑path/worker split.
 
 ### `/analytics/creators` (GET)
 Summary statistics for campaign effectiveness.
@@ -314,4 +320,5 @@ Tip: The intent gate is fuzzy-aware and accepts “from <handle>” patterns (e.
 - `tests/test_conversation.py`: multi-turn conversations: ask → creator → issue; out_of_scope → creator; completed then resend blocked; fuzzy follow-up issuance.
 - `tests/test_fuzzy_and_llm.py`: fuzzy acceptance for misspellings; mocked LLM fallback tests (retry success, terminal none, budget exhausted) using async processing.
 - `tests/test_api_endpoints.py`: `/simulate` round-trip and `/analytics/creators` summary; `/admin/reset` clears state; `/admin/reload` applies a new alias and affects next requests.
+- `tests/test_platform_normalizer.py`: validates that Instagram, TikTok, and WhatsApp payloads normalize correctly into the internal shape.
 - `tests/test_normalization.py`: normalization robustness (trailing punctuation, whitespace/case, hyphenation, Unicode punctuation, mention punctuation, emoji noise) — all still resolve to the correct creator/code.

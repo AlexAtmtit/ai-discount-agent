@@ -124,8 +124,7 @@ class AnalyticsSummary(BaseModel):
 class Settings(BaseModel):
     """Application settings loaded from environment"""
     google_api_key: Optional[str] = Field(None, description="Gemini API key")
-    db_url: str = Field(default="sqlite:///ai_discount_agent.db", description="Database connection URL")
+    db_url: str = Field(default="postgresql://user:password@localhost:5432/ai_discount_agent", description="Database connection URL (optional; demo uses in-memory)")
     campaign_config_path: str = Field(default="./config/campaign.yaml", description="Path to campaign config")
     templates_path: str = Field(default="./config/templates.yaml", description="Path to reply templates")
-    fastpath_enabled: bool = Field(default=True, description="Enable fast-path processing")
     log_level: str = Field(default="INFO", description="Logging level")

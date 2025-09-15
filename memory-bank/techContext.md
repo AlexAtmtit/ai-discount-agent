@@ -107,7 +107,7 @@ if similarity > threshold:
 **Bounded Execution Pattern**:
 - Max 2 attempts per message
 - 1-second total budget across all attempts
-- 400ms timeout per individual attempt
+- 4000ms timeout per individual attempt (default)
 - Exponential backoff for retries
 
 ### Rule-Based Processing (Primary Strategy)
