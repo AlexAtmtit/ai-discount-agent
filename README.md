@@ -1,7 +1,7 @@
 # AI Discount Agent
 
 A production-oriented DM agent for Instagram, TikTok, and WhatsApp that issues the right discount code quickly and safely.
-Messages are normalized and passed through a rule‑first pipeline—exact match, then fuzzy, then a tightly bounded LLM—so it’s fast, predictable, and cost‑controlled.
+Messages are normalized and passed through a rule‑first pipeline: exact match, then fuzzy, then (if needed) a tightly bounded LLM. So it’s fast, predictable, and cost‑controlled.
 Every interaction is enriched per user_id, logged to a Postgres‑ready schema, and surfaced via a simple analytics endpoint, with real webhooks, signature stubs, and an interactive CLI for hands‑on testing.
 
 ## Architecture Overview
