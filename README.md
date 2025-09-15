@@ -1,10 +1,27 @@
 # AI Discount Agent
 
-A production-minded backend system that automates discount code distribution in DMs across Instagram, TikTok, and WhatsApp.
+A production-oriented DM agent for Instagram, TikTok, and WhatsApp that issues the right discount code quickly and safely.
+Messages are normalized and passed through a rule‑first pipeline—exact match, then fuzzy, then a tightly bounded LLM—so it’s fast, predictable, and cost‑controlled.
+Every interaction is enriched per user_id, logged to a Postgres‑ready schema, and surfaced via a simple analytics endpoint, with real webhooks, signature stubs, and an interactive CLI for hands‑on testing.
 
 ## Architecture Overview
 
 ### System Diagram
+
+```mermaid
+flowchart TD
+    P["DM from Instagram/TikTok/WhatsApp"] --> W["Webhook (verify signature)"]
+    W --> N["Normalize 
+    (single message shape)"]
+    N --> A["Agent (rules > fuzzy > LLM)
+    Issue code or ask for creator"]
+    A --> E["Enrich lead"]
+    E --> R["Send reply to the user"]
+    R --> D["Save interaction 
+    (Postgres schema)"]
+    D --> X["Analytics (/analytics/creators)"]
+```
+
 ```mermaid
 sequenceDiagram
   participant User
@@ -21,138 +38,174 @@ sequenceDiagram
   Agent->>DB: write interaction row
 ```
 
-flowchart TD
-  P[DM from IG or TT or WA]
-  W[Webhook receive]
-  N[Normalize message]
-A[Agent - LangGraph
- detect creator
- or ask for creator]
-  R[Send reply via platform API]
-  D[Log interaction in DB]
-  X[Analytics read DB]
 
-  P --> W --> N --> A --> R --> D --> X
+## Approach Overview
+
+**A rule‑first agent that stays fast, predictable, and cheap.** Messages are normalized into one shape, passed through exact and fuzzy detection, and only then (if needed) into a tightly bounded LLM. Every interaction is logged for analytics and lead scoring.
+
+* **Hybrid detection:** exact → fuzzy → LLM (2 attempts, hard time budgets; allow‑listed JSON).
+* **Smart intent:** keyword + fuzzy‑aware intent to avoid LLM calls on noise.
+* **Data logging:** we persist a row per interaction that maps 1:1 to a Postgres‑ready schema (timestamp, platform, raw text, identified_creator, discount_code_sent, status, enrichment fields).
+* **Idempotency:** one code per (platform, user); resend returns the same code without re‑issuance.
+* **Multi‑platform (Bonus A)**: webhook signature stubs, payload normalizers for IG/TT/WA, and a single internal message shape.
+* **Lead enrichment (Bonus B):** after a creator is identified, we enrich the user_id deterministically (follower_count, is_potential_influencer) and include it in the logged row.
+* **Analytics (Bonus C):** /analytics/creators summarizes requests and codes_sent per creator, with per‑platform breakdown.
+* **Ops & DX:** hot config reload, interactive CLI chat, explain‑mode traces, and a demo script that showcases exact, fuzzy, ask, LLM, and normalization cases.
+* **Tests:** 25+ concise tests cover detection (exact/fuzzy/intent), normalization (punctuation/Unicode/emoji), LLM fallback (mocked), conversation flows, analytics, admin, and platform normalizers.
+
+
+## Tooling Justification
+
+* **LangGraph:** Explicit, testable state machine (normalize → intent → exact → fuzzy → LLM → decide). Predictable flow, easy to trace, simple to extend; supports async nodes.
+* **Pydantic v2:** Typed models for IncomingMessage, AgentDecision, and InteractionRow with ISO8601 timestamp validation. Safer contracts, cleaner API responses via model_dump().
+* **FastAPI + Uvicorn:** Async endpoints for /simulate, /webhook/{platform}, /analytics/creators, /admin/*. Small, fast, auto‑docs, great DX for a prototype and beyond.
+* **RapidFuzz: **Partial string similarity for alias matching with thresholds.Solid performance and control before resorting to an LLM.
+* **Gemini 2.5 Flash Lite:** Bounded cost/latency with safe, parseable responses.
+
 
 ## Quick Demo (2 minutes)
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/AlexAtmtit/ai-discount-agent
 cd ai-discount-agent
 ./setup.sh              # Setup virtual environment and dependencies
 ./demo.sh               # Run the standalone agent demo
 
 # Optional advanced demo (explain + mock LLM + clean state)
-python scripts/demo_agent.py --explain --reset --mock-llm success
+python3 scripts/demo_agent.py --explain --reset --mock-llm success
 ```
 
-### Sample Output (abbreviated)
+## Full Setup Instructions
+
+1. **Clone and install**:
+   ```bash
+   git clone https://github.com/AlexAtmtit/ai-discount-agent
+   cd ai-discount-agent
+   ./setup.sh
+   ```
+
+2. **Optional LLM setup**:
+   ```bash
+   export GOOGLE_API_KEY=your_api_key
+   ```
+
+3. **Run demo**:
+   ```bash
+   ./demo.sh             # quick demo
+   # or advanced options
+   python3 scripts/demo_agent.py --explain --reset --mock-llm success
+   ```
+
+4. **Start server**:
+   ```bash
+   ./run.sh  # FastAPI server on localhost:8000
+   ```
+
+### Interactive CLI Chat (optional)
+
+Start the server in one terminal:
+```bash
+./run.sh
+```
+
+Open another terminal for a chat session:
+```bash
+./chat.sh --server http://localhost:8000 --user cli_user --platform instagram --explain
+```
+
+Now type messages (no cURL needed). Commands:
+- `/help` — list commands
+- `/reset` — clear in-memory store on server
+- `/reload` — reload YAML configs
+- `/quit` — exit
+
+If `GOOGLE_API_KEY` is set before starting the server, ambiguous messages will use LLM fallback where rules can’t decide.
+
+
+### Sample Output
 ```
 INPUT:
   mkbhd sent me
 METHOD:
   📏 EXACT MATCH
 REPLY:
-  Here's your discount code from mkbhd: MARQUES20 🎉
+  Here's your discount code from mkbhd: MARQUES20 
 ROW:
-  {"user_id":"demo_user","platform":"instagram","timestamp":"2025-09-13T10:00:00.000Z", ...}
+  user_id: demo_user_1
+  platform: instagram
+  timestamp: 2025-09-15T16:57:48.505Z
+  raw_incoming_message: mkbhd sent me
+  identified_creator: mkbhd
+  discount_code_sent: MARQUES20
+  conversation_status: completed
+  follower_count: 108028
+  is_potential_influencer: true
 
 INPUT:
-  discount
+  promo code
 METHOD:
-  (no creator detected)
+  🤖 ASK (no confident creator)
 REPLY:
   Thanks for your message! Which creator sent you? 😊
+ROW:
+  user_id: demo_user_2
+  platform: instagram
+  timestamp: 2025-09-15T16:58:12.123Z
+  raw_incoming_message: promo code
+  identified_creator: null
+  discount_code_sent: null
+  conversation_status: pending_creator_info
+  follower_count: null
+  is_potential_influencer: null
 ```
 
-## Approach Overview
-
-We prioritize a hybrid detection strategy: exact alias matching first, then fuzzy matching, finally bounded LLM fallback. The system avoids guessing to prevent incorrect code distribution.
-
-**Key decisions:**
-- **In-memory storage for demo** (files are for documentation)
-- **Bounded LLM** (2 attempts, 2s total budget by default, only allow-listed responses)
-- **Intent detection** prevents spam/abuse by asking out irrelevant messages
-- **One code per user per platform** prevents fraud
-
-First, we address state and idempotency. Each platform is treated separately. The unit of truth is "campaign + platform + user," and each message has a unique message ID for unique identification. This approach maintains simplicity and security by ensuring that each user has their own unique code for each campaign on each platform.
-
-We use a hybrid processing model with a fast webhook acknowledgment. A worker does most of the work, and we can reply inline if a message contains a clear exact alias and the user hasn't received a code yet. Otherwise, we queue and reply from the worker to avoid timeouts and maintain speed.
-
-Creator detection is rule-first. First, we normalize the text, then we check for exact aliases and use a tight fuzzy match. If the rules cannot decide, we call Gemini 2.5 Flash Lite once within a strict budget with allow-listed JSON. If it times out or appears incorrect, we do not make an educated guess. We ask the user to name the creator.
-
-The code policy is straightforward. Each user is limited to one code per campaign per platform. The first confident match gets attribution. Resending returns the same code without creating a new issuance.
-
-We use LangGraph to express the decision flow. The graph is a single pass: normalize → exact → fuzzy → Gemini → decide. The worker calls the graph and receives a user reply and a row for logging.
-
-Configuration lives outside of the code. Creators, codes, aliases, thresholds, and templates are in YAML. We can hot-reload them. Secrets come from environment variables.
-
-Persistence follows the assignment of one simple table. We store the platform, user, timestamp, raw text, identified creator (if applicable), discount code (if applicable), and conversation status. In production, we would add unique constraints for webhook deduplication and issuance guards. We include these as commented "notes" in the schema file.
-
-This design is scalable. If the number of creators grows to the hundreds or thousands, we can swap the matcher under the same interface (Aho–Corasick + n-gram retrieval). The agent, worker, and API would remain the same.
-
-
-
-## Agent Function (Step 2)
-
-The core requirement is met through `run_agent_on_message()`:
-
-```python
-from scripts.agent_graph import run_agent_on_message
-
-result = run_agent_on_message("mkbhd sent me")
-# Returns: {"reply": str, "database_row": dict}
+Fuzzy match example
 ```
-
-## Tooling Justification
-
-**LangGraph + LangChain**: Explicit state machines for reliable AI workflows
-**Pydantic**: Type safety and validation throughout the system
-**FastAPI**: Production-ready web framework for high-throughput APIs
-**RapidFuzz**: Efficient fuzzy string matching
-**Gemini 2.5 Flash Lite**: Cost-effective LLM with bounded execution
-
-Each tool is chosen for its production maturity and operational reliability.
+INPUT:
+  marqes brwnli promo
+METHOD:
+  🌀 FUZZY MATCH
+REPLY:
+  Here's your discount code from mkbhd: MARQUES20 🎉
+ROW:
+  user_id: demo_user_3
+  platform: instagram
+  timestamp: 2025-09-15T16:59:22.456Z
+  raw_incoming_message: marqes brwnli promo
+  identified_creator: mkbhd
+  discount_code_sent: MARQUES20
+  conversation_status: completed
+  follower_count: 98231
+  is_potential_influencer: true
+```
 
 ## Database Schema
 
-The provided `design/schema.sql` meets the assignment requirements with a Postgres design. The app uses an in‑memory store for the demo, but the production table is:
+The app uses an in‑memory store for the demo, but the production table (Postgres) is:
 
 ```sql
 CREATE TABLE IF NOT EXISTS interactions (
   id BIGSERIAL PRIMARY KEY,
   user_id TEXT NOT NULL,
   platform TEXT NOT NULL CHECK (platform IN ('instagram','tiktok','whatsapp')),
-  timestamp TIMESTAMPTZ NOT NULL,
+  timestamp TIMESTAMPTZ NOT NULL,                -- initial request time (UTC)
   raw_incoming_message TEXT NOT NULL,
-  identified_creator TEXT NULL,
-  discount_code_sent TEXT NULL,
-  conversation_status TEXT NOT NULL CHECK (
+  identified_creator TEXT NULL,                   -- NULL when unknown/ask
+  discount_code_sent TEXT NULL,                   -- NULL when unknown/ask
+  conversation_status TEXT NOT NULL CHECK (       -- core statuses per brief + 'out_of_scope'
     conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
   ),
+  -- Bonus B (Lead Enrichment):
   follower_count INTEGER NULL,
   is_potential_influencer BOOLEAN NULL
 );
 ```
 
-Recommended indexes are included in comments (webhook idempotency and issuance guard). The agent returns a `database_row` JSON that maps 1:1 to this schema.
-
-## LLM Provider Configuration
-
-**Model**: Gemini 2.5 Flash Lite via google-generativeai
-**Execution**: Bounded with 2 attempts, 8s total budget (default), 4000ms per attempt
-**Validation**: Strict JSON mode with {"creator":"<allow-listed|none>"} response
-**Fallback**: If LLM fails after retries, system asks for creator clarification
-
-Set your key:
-```bash
-export GOOGLE_API_KEY=your_google_api_key_here
-```
 
 ## Bonus Features
 
 ### A) Multi-Platform Considerations
-See `design/multi-platform.md` for details on platform APIs, webhook signatures, reply windows (e.g., WhatsApp 24h), and business requirements. This repo includes working normalizers and signature stubs:
+This repo includes working normalizers and signature stubs for Instagram, TikTok, and WhatsApp:
 
 - Code: `scripts/platform_normalizer.py`
   - `normalize_instagram`, `normalize_tiktok`, `normalize_whatsapp` → map raw payloads to `IncomingMessage`
@@ -169,10 +222,73 @@ export WHATSAPP_APP_SECRET=...   # enables WhatsApp signature check
 export TIKTOK_APP_SECRET=...     # enables TikTok signature check
 ```
 
-Example payloads and behavior are documented in `design/multi-platform.md`. In production, add:
+## Practical notes
+- WhatsApp has a 24‑hour session window (templates needed beyond that); Instagram/TikTok also have policy/rate limits to observe — both are handled by platform policy, not in this prototype.
+- TikTok signature verification here is simplified; use the official timestamped scheme in production.
+- All platforms write to the same interactions list; `/analytics/creators` aggregates by creator and includes a per‑platform breakdown.
+
+**In production, add:**
 - Rate-limit backoff by platform
 - 24h session window enforcement for WhatsApp template messages
 - Idempotency by `(platform, message_id)`
+
+**Quick platform notes**
+- Instagram (Meta/Messenger)
+  - Signature: `X-Hub-Signature-256` (HMAC‑SHA256); business app required; reply within session window.
+  - Payload: nested `entry[messaging]` with `sender.id`, `message.mid`, `message.text`.
+- TikTok
+  - Signature: `X-TikTok-Signature` (real scheme uses timestamp + signing; prototype uses body HMAC for demo).
+  - Payload: `messages[0]` with `sender.id`, `id`, `text`; business verification and rate limits apply.
+- WhatsApp Business API
+  - Signature: `X-Hub-Signature-256` (HMAC‑SHA256); strict opt‑in; 24h session with template requirement beyond 24h.
+  - Payload: `contacts[0].wa_id`, `messages[0].id`, `messages[0].text.body`.
+
+Minimal examples → normalized shape
+```json
+// Instagram (in) → IncomingMessage (out)
+{
+  "entry": [{"messaging": [{
+    "sender": {"id": "ig_user_1"},
+    "message": {"mid": "m1", "text": "mkbhd sent me"}
+  }]}]
+}
+=> {"platform":"instagram","user_id":"ig_user_1","message_id":"m1","text":"mkbhd sent me"}
+
+// TikTok (in) → IncomingMessage (out)
+{
+  "messages": [{"sender": {"id": "tt_user_1"}, "id": "t1", "text": "casey discount"}]
+}
+=> {"platform":"tiktok","user_id":"tt_user_1","message_id":"t1","text":"casey discount"}
+
+// WhatsApp (in) → IncomingMessage (out)
+{
+  "contacts": [{"wa_id": "wa_user_1"}],
+  "messages": [{"id": "w1", "text": {"body": "from @mkbhd"}}]
+}
+=> {"platform":"whatsapp","user_id":"wa_user_1","message_id":"w1","text":"from @mkbhd"}
+```
+
+How to demo multi‑platform quickly
+```bash
+# (Optional) enable signature checks
+export IG_APP_SECRET=secret; export WHATSAPP_APP_SECRET=secret; export TIKTOK_APP_SECRET=secret
+
+# Instagram
+curl -s localhost:8000/webhook/instagram \
+  -H 'Content-Type: application/json' \
+  -d '{"entry":[{"messaging":[{"sender":{"id":"ig_u1"},"message":{"mid":"m1","text":"mkbhd sent me"}}]}]}' | jq
+
+# TikTok
+curl -s localhost:8000/webhook/tiktok \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"sender":{"id":"tt_u1"},"id":"t1","text":"casey discount"}]}' | jq
+
+# WhatsApp
+curl -s localhost:8000/webhook/whatsapp \
+  -H 'Content-Type: application/json' \
+  -d '{"contacts":[{"wa_id":"wa_u1"}],"messages":[{"id":"w1","text":{"body":"from @mkbhd"}}]}' | jq
+```
+
 
 ### B) Enrichment & Lead Scoring
 We simulate lead enrichment for the user_id after the creator is identified. The agent deterministically computes `follower_count` and `is_potential_influencer` from `user_id` (hash‑based), and includes them in the `database_row`. The production schema includes these columns.
@@ -182,6 +298,35 @@ We simulate lead enrichment for the user_id after the creator is identified. The
 GET /analytics/creators
 ```
 Returns aggregated summary of codes distributed by creator and platform.
+
+
+
+## Normalization & Enrichment
+
+- Normalization (noise-tolerant):
+  - Lowercases; collapses whitespace; replaces common ASCII punctuation with spaces and normalizes smart quotes/dashes; preserves “@” mentions; emoji‑tolerant.
+  - Examples:
+    - "casey-neistat discount" → "casey neistat discount" (matches alias)
+    - "Lily’s video discount" → "lily s video discount" (Unicode apostrophe normalized; matches alias "lily")
+    - "I came from @mkbhd, need code" → in‑scope via mention; proceeds to detection
+    - "mkbhd 😃🔥 sent me" → emojis preserved; exact "mkbhd" still matches
+
+- Lead Enrichment (Bonus B):
+  - After the creator is identified, we simulate enrichment for the user_id (hash‑based):
+    - follower_count (int)
+    - is_potential_influencer (bool)
+  - These fields are included in the `database_row` and defined in the Postgres schema.
+
+## Test Suite Summary (short)
+
+- `tests/test_agent_core.py`: core detection and response flows; out_of_scope, ask_creator, idempotency; platform handling; row shape and timestamp format.
+- `tests/test_conversation.py`: multi-turn conversations: ask → creator → issue; out_of_scope → creator; completed then resend blocked; fuzzy follow-up issuance.
+- `tests/test_fuzzy_and_llm.py`: fuzzy acceptance for misspellings; mocked LLM fallback tests (retry success, terminal none, budget exhausted) using async processing.
+- `tests/test_api_endpoints.py`: `/simulate` round-trip and `/analytics/creators` summary; `/admin/reset` clears state; `/admin/reload` applies a new alias and affects next requests.
+- `tests/test_platform_normalizer.py`: validates that Instagram, TikTok, and WhatsApp payloads normalize correctly into the internal shape.
+- `tests/test_normalization.py`: normalization robustness (trailing punctuation, whitespace/case, hyphenation, Unicode punctuation, mention punctuation, emoji noise) — all still resolve to the correct creator/code.
+
+
 
 ## API Endpoints
 
@@ -205,7 +350,7 @@ Response:
 ```
 
 ### `/webhook/{platform}` (POST)
-Prototype webhook endpoint that processes messages inline. For production, the diagrams show a planned fast‑path/worker split.
+Prototype webhook endpoint that processes messages inline and returns `{reply, database_row, detection_method, detection_confidence}`; for production, the diagrams show a planned fast‑path/worker split.
 
 ### `/analytics/creators` (GET)
 Summary statistics for campaign effectiveness (by creator, across all platforms). Response shape:
@@ -267,7 +412,6 @@ creators:
       - marques
       - mkbhd
       - @mkbhd
-    threshold: 0.8  # Fuzzy match threshold
 ```
 
 Reply templates in `config/templates.yaml`:
@@ -278,76 +422,3 @@ replies:
   ask_creator: "Which creator sent you? I have codes from Casey Neistat, Marques Brownlee, Lily Singh, Peter McKinnon."
   ambiguous: "Could you clarify which creator sent you? {creator_handle} or {other_creator}?"
 ```
-
-## Setup Instructions
-
-1. **Clone and install**:
-   ```bash
-   git clone <your-repo-url>
-   cd ai-discount-agent
-   ./setup.sh
-   ```
-
-2. **Optional LLM setup**:
-   ```bash
-   export GOOGLE_API_KEY=your_api_key
-   ```
-
-3. **Run demo**:
-   ```bash
-   ./demo.sh             # quick demo
-   # or advanced options
-   python scripts/demo_agent.py --explain --reset --mock-llm success
-   ```
-
-4. **Start server**:
-   ```bash
-   ./run.sh  # FastAPI server on localhost:8000
-   ```
-
-### Interactive CLI Chat (optional)
-
-Start the server in one terminal:
-```bash
-./run.sh
-```
-
-Open another terminal for a chat session:
-```bash
-./chat.sh --server http://localhost:8000 --user cli_user --platform instagram --explain
-```
-
-Now type messages (no cURL needed). Commands:
-- `/help` — list commands
-- `/reset` — clear in-memory store on server
-- `/reload` — reload YAML configs
-- `/quit` — exit
-
-If `GOOGLE_API_KEY` is set before starting the server, ambiguous messages will use LLM fallback where rules can’t decide.
-
-Tip: The intent gate is fuzzy-aware and accepts “from <handle>” patterns (e.g., “from @mkbd”), so near-miss creator mentions proceed to detection (exact → fuzzy → LLM) even without explicit words like “discount” or “code”.
-
-## Normalization & Enrichment
-
-- Normalization (noise-tolerant):
-  - Lowercases; collapses whitespace; replaces common ASCII punctuation with spaces and normalizes smart quotes/dashes; preserves “@” mentions; emoji‑tolerant.
-  - Examples:
-    - "casey-neistat discount" → "casey neistat discount" (matches alias)
-    - "Lily’s video discount" → "lily s video discount" (Unicode apostrophe normalized; matches alias "lily")
-    - "I came from @mkbhd, need code" → in‑scope via mention; proceeds to detection
-    - "mkbhd 😃🔥 sent me" → emojis preserved; exact "mkbhd" still matches
-
-- Lead Enrichment (Bonus B):
-  - After the creator is identified, we simulate enrichment for the user_id (hash‑based):
-    - follower_count (int)
-    - is_potential_influencer (bool)
-  - These fields are included in the `database_row` and defined in the Postgres schema.
-
-## Test Suite Summary (short)
-
-- `tests/test_agent_core.py`: core detection and response flows; out_of_scope, ask_creator, idempotency; platform handling; row shape and timestamp format.
-- `tests/test_conversation.py`: multi-turn conversations: ask → creator → issue; out_of_scope → creator; completed then resend blocked; fuzzy follow-up issuance.
-- `tests/test_fuzzy_and_llm.py`: fuzzy acceptance for misspellings; mocked LLM fallback tests (retry success, terminal none, budget exhausted) using async processing.
-- `tests/test_api_endpoints.py`: `/simulate` round-trip and `/analytics/creators` summary; `/admin/reset` clears state; `/admin/reload` applies a new alias and affects next requests.
-- `tests/test_platform_normalizer.py`: validates that Instagram, TikTok, and WhatsApp payloads normalize correctly into the internal shape.
-- `tests/test_normalization.py`: normalization robustness (trailing punctuation, whitespace/case, hyphenation, Unicode punctuation, mention punctuation, emoji noise) — all still resolve to the correct creator/code.
