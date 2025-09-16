@@ -1,52 +1,11 @@
 flowchart TD
-    subgraph "External Platforms"
-        IG[Instagram DM API]
-        TT[TikTok DM API]
-        WA[WhatsApp Business API]
-    end
-
-    subgraph "Webhook Layer"
-        WH[Webhook Receiver]
-        NORM[Message Normalizer]
-    end
-
-    subgraph "Core Processing"
-        INT[Detect Intent]
-        DETEX[Exact Match]
-        DETFZ[Fuzzy Match]
-        DETLLM[LLM Fallback]
-        DEC[Decide (issue/ask)]
-        ENR[Enrichment]
-        STORE[In-Memory Store]
-        SEND[Reply Sender]
-    end
-
-    subgraph "Admin & Analytics"
-        API[FastAPI]
-        SIM[/simulate Endpoint]
-        WEB[/webhook/{platform}]
-        ANA[/analytics/creators]
-        RELOAD[/admin/reload]
-    end
-
-    IG --> WH
-    TT --> WH
-    WA --> WH
-    WH --> NORM --> INT
-    INT -->|out_of_scope| SEND
-    INT -->|in_scope| DETEX
-    DETEX -->|exact| DEC
-    DETEX -->|no exact| DETFZ
-    DETFZ -->|confident| DEC
-    DETFZ -->|low| DETLLM --> DEC
-    DEC -->|ask| SEND
-    DEC -->|issue| ENR --> SEND
-    ENR --> STORE
-    STORE -.-> ANA
-    SEND -.->|reply| IG
-    SEND -.->|reply| TT
-    SEND -.->|reply| WA
-    SIM --> NORM
-    WEB --> NORM
-    ANA --> STORE
-    RELOAD --> INT
+    P["DM from Instagram/TikTok/WhatsApp"] --> W["Webhook (verify signature)"]
+    W --> N["Normalize 
+    (single message shape)"]
+    N --> A["Agent (rules > fuzzy > LLM)
+    Issue code or ask for creator"]
+    A --> E["Enrich lead"]
+    E --> R["Send reply to the user"]
+    R --> D["Save interaction 
+    (Postgres schema)"]
+    D --> X["Analytics (/analytics/creators)"]
