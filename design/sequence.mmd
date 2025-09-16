@@ -1,29 +1,13 @@
 sequenceDiagram
-    participant User
-    participant Webhook
-    participant Normalizer
-    participant Intent
-    participant Detector
-    participant LLM
-    participant Enrich
-    participant Store
-    participant Sender
-    participant Platform
+  participant User
+  participant Webhook
+  participant Agent
+  participant Platform
+  participant DB
 
-    Note over User, Platform: Happy Path (inline)
-    User->>Webhook: DM text + metadata
-    Webhook->>Normalizer: Normalize to internal format
-    Normalizer-->>Intent: {platform, user_id, message}
-    Intent-->>Detector: intent=in_scope
-    Detector-->>Sender: exact hit → issue code
-    Sender->>Enrich: enrichment lookup
-    Enrich->>Store: persist row
-    Sender->>Platform: send reply
-    Platform-->>User: "Here's your discount code …"
-
-    Note over Intent, LLM: Fallback path
-    Intent-->>Detector: in_scope
-    Detector-->>LLM: exact & fuzzy → none
-    LLM-->>Detector: {"creator":"mkbhd"|"none"}
-    Detector-->>Sender: decide (issue/ask)
-    Sender->>Platform: "Which creator sent you?"
+  User->>Webhook: DM text
+  Webhook->>Agent: normalized message
+  Agent->>Agent: detect creator or ask
+  Agent->>Platform: reply text
+  Platform-->>User: message delivered
+  Agent->>DB: write interaction row
