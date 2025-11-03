@@ -47,9 +47,8 @@ sequenceDiagram
 * **Smart intent:** keyword + fuzzy‑aware intent to avoid LLM calls on noise.
 * **Data logging:** we persist a row per interaction that maps 1:1 to a Postgres‑ready schema (timestamp, platform, raw text, identified_creator, discount_code_sent, status, enrichment fields).
 * **Idempotency:** one code per (platform, user); resend returns the same code without re‑issuance.
-* **Multi‑platform (Bonus A)**: webhook signature stubs, payload normalizers for IG/TT/WA, and a single internal message shape.
-* **Lead enrichment (Bonus B):** after a creator is identified, we enrich the user_id deterministically (follower_count, is_potential_influencer) and include it in the logged row.
-* **Analytics (Bonus C):** /analytics/creators summarizes requests and codes_sent per creator, with per‑platform breakdown.
+* **Lead enrichment:** after a creator is identified, we enrich the user_id deterministically (follower_count, is_potential_influencer) and include it in the logged row.
+* **Analytics:** /analytics/creators summarizes requests and codes_sent per creator, with per‑platform breakdown.
 * **Ops & DX:** hot config reload, interactive CLI chat, explain‑mode traces, and a demo script that showcases exact, fuzzy, ask, LLM, and normalization cases.
 * **Tests:** 25+ concise tests cover detection (exact/fuzzy/intent), normalization (punctuation/Unicode/emoji), LLM fallback (mocked), conversation flows, analytics, admin, and platform normalizers.
 
@@ -195,105 +194,20 @@ CREATE TABLE IF NOT EXISTS interactions (
   conversation_status TEXT NOT NULL CHECK (       -- core statuses per brief + 'out_of_scope'
     conversation_status IN ('pending_creator_info','completed','error','out_of_scope')
   ),
-  -- Bonus B (Lead Enrichment):
+  -- Lead Enrichment:
   follower_count INTEGER NULL,
   is_potential_influencer BOOLEAN NULL
 );
 ```
 
 
-## Bonus Features
-
-### A) Multi-Platform Considerations
-This repo includes working normalizers and signature stubs for Instagram, TikTok, and WhatsApp:
-
-- Code: `scripts/platform_normalizer.py`
-  - `normalize_instagram`, `normalize_tiktok`, `normalize_whatsapp` → map raw payloads to `IncomingMessage`
-  - HMAC-SHA256 verification stubs for Instagram/WhatsApp (`X-Hub-Signature-256`) and TikTok (`X-TikTok-Signature`)
-- API: `/webhook/{platform}`
-  - Verifies signature when `IG_APP_SECRET`/`WHATSAPP_APP_SECRET`/`TIKTOK_APP_SECRET` is set
-  - Normalizes payload, runs the agent asynchronously, persists a row, and returns `{reply, database_row, detection_method, detection_confidence}`
-- Tests: `tests/test_platform_normalizer.py` exercise normalization across all three platforms
-
-Example env:
-```bash
-export IG_APP_SECRET=...         # enables Instagram signature check
-export WHATSAPP_APP_SECRET=...   # enables WhatsApp signature check
-export TIKTOK_APP_SECRET=...     # enables TikTok signature check
-```
-
-## Practical notes
-- WhatsApp has a 24‑hour session window (templates needed beyond that); Instagram/TikTok also have policy/rate limits to observe — both are handled by platform policy, not in this prototype.
-- TikTok signature verification here is simplified; use the official timestamped scheme in production.
-- All platforms write to the same interactions list; `/analytics/creators` aggregates by creator and includes a per‑platform breakdown.
-
-**In production, add:**
-- Rate-limit backoff by platform
-- 24h session window enforcement for WhatsApp template messages
-- Idempotency by `(platform, message_id)`
-
-**Quick platform notes**
-- Instagram (Meta/Messenger)
-  - Signature: `X-Hub-Signature-256` (HMAC‑SHA256); business app required; reply within session window.
-  - Payload: nested `entry[messaging]` with `sender.id`, `message.mid`, `message.text`.
-- TikTok
-  - Signature: `X-TikTok-Signature` (real scheme uses timestamp + signing; prototype uses body HMAC for demo).
-  - Payload: `messages[0]` with `sender.id`, `id`, `text`; business verification and rate limits apply.
-- WhatsApp Business API
-  - Signature: `X-Hub-Signature-256` (HMAC‑SHA256); strict opt‑in; 24h session with template requirement beyond 24h.
-  - Payload: `contacts[0].wa_id`, `messages[0].id`, `messages[0].text.body`.
-
-Minimal examples → normalized shape
-```json
-// Instagram (in) → IncomingMessage (out)
-{
-  "entry": [{"messaging": [{
-    "sender": {"id": "ig_user_1"},
-    "message": {"mid": "m1", "text": "mkbhd sent me"}
-  }]}]
-}
-=> {"platform":"instagram","user_id":"ig_user_1","message_id":"m1","text":"mkbhd sent me"}
-
-// TikTok (in) → IncomingMessage (out)
-{
-  "messages": [{"sender": {"id": "tt_user_1"}, "id": "t1", "text": "casey discount"}]
-}
-=> {"platform":"tiktok","user_id":"tt_user_1","message_id":"t1","text":"casey discount"}
-
-// WhatsApp (in) → IncomingMessage (out)
-{
-  "contacts": [{"wa_id": "wa_user_1"}],
-  "messages": [{"id": "w1", "text": {"body": "from @mkbhd"}}]
-}
-=> {"platform":"whatsapp","user_id":"wa_user_1","message_id":"w1","text":"from @mkbhd"}
-```
-
-How to demo multi‑platform quickly
-```bash
-# (Optional) enable signature checks
-export IG_APP_SECRET=secret; export WHATSAPP_APP_SECRET=secret; export TIKTOK_APP_SECRET=secret
-
-# Instagram
-curl -s localhost:8000/webhook/instagram \
-  -H 'Content-Type: application/json' \
-  -d '{"entry":[{"messaging":[{"sender":{"id":"ig_u1"},"message":{"mid":"m1","text":"mkbhd sent me"}}]}]}' | jq
-
-# TikTok
-curl -s localhost:8000/webhook/tiktok \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"sender":{"id":"tt_u1"},"id":"t1","text":"casey discount"}]}' | jq
-
-# WhatsApp
-curl -s localhost:8000/webhook/whatsapp \
-  -H 'Content-Type: application/json' \
-  -d '{"contacts":[{"wa_id":"wa_u1"}],"messages":[{"id":"w1","text":{"body":"from @mkbhd"}}]}' | jq
-```
+## Addtional Features
 
 
-### B) Enrichment & Lead Scoring
+### Enrichment & Lead Scoring
 We simulate lead enrichment for the user_id after the creator is identified. The agent deterministically computes `follower_count` and `is_potential_influencer` from `user_id` (hash‑based), and includes them in the `database_row`. The production schema includes these columns.
 
-### C) Analytics Endpoint
+### Analytics Endpoint
 ```
 GET /analytics/creators
 ```
@@ -311,7 +225,7 @@ Returns aggregated summary of codes distributed by creator and platform.
     - "I came from @mkbhd, need code" → in‑scope via mention; proceeds to detection
     - "mkbhd 😃🔥 sent me" → emojis preserved; exact "mkbhd" still matches
 
-- Lead Enrichment (Bonus B):
+- Lead Enrichment:
   - After the creator is identified, we simulate enrichment for the user_id (hash‑based):
     - follower_count (int)
     - is_potential_influencer (bool)
