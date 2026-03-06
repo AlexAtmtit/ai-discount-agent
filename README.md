@@ -58,7 +58,7 @@ sequenceDiagram
 * **LangGraph:** Explicit, testable state machine (normalize → intent → exact → fuzzy → LLM → decide). Predictable flow, easy to trace, simple to extend; supports async nodes.
 * **Pydantic v2:** Typed models for IncomingMessage, AgentDecision, and InteractionRow with ISO8601 timestamp validation. Safer contracts, cleaner API responses via model_dump().
 * **FastAPI + Uvicorn:** Async endpoints for /simulate, /webhook/{platform}, /analytics/creators, /admin/*. Small, fast, auto‑docs, great DX for a prototype and beyond.
-* **RapidFuzz:** Partial string similarity for alias matching with thresholds.Solid performance and control before resorting to an LLM.
+* **RapidFuzz:** Partial string similarity for alias matching with thresholds. Solid performance and control before resorting to an LLM.
 * **Gemini 2.5 Flash Lite:** Bounded cost/latency with safe, parseable responses.
 
 
@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS interactions (
 ```
 
 
-## Addtional Features
+## Additional Features
 
 
 ### Enrichment & Lead Scoring
@@ -211,7 +211,7 @@ We simulate lead enrichment for the user_id after the creator is identified. The
 ```
 GET /analytics/creators
 ```
-Returns aggregated summary of codes distributed by creator and platform.
+Returns an aggregated summary of codes distributed by creator and platform.
 
 
 
